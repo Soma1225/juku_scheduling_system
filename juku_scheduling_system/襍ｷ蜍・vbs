@@ -1,0 +1,57 @@
+' 起動.vbs
+'
+' app.py をコンソール画面を表示せずに起動するランチャー。
+' このファイルをダブルクリックするだけで、
+' サーバーが起動し、自動でブラウザが開く。
+'
+' 使い方:
+'   1. このファイルを app.py と同じフォルダに置く
+'   2. ダブルクリックで起動
+'   3. 終了したいときは、タスクトレイやタスクマネージャーから
+'      python.exe(pythonw.exe)のプロセスを終了する
+'      (コンソール非表示のため、Ctrl+Cが使えないための代替手段)
+'
+' デスクトップにアイコンを置きたい場合:
+'   このファイルを右クリック→「ショートカットの作成」→
+'   できたショートカットをデスクトップに移動し、
+'   ショートカットを右クリック→プロパティ→アイコンの変更、で好きな見た目にできる
+
+Dim objShell, objFSO, scriptDir, pythonwPath, appPath
+
+Set objShell = CreateObject("WScript.Shell")
+Set objFSO = CreateObject("Scripting.FileSystemObject")
+
+' このvbsファイル自身があるフォルダを取得(=app.pyがあるはずのフォルダ)
+scriptDir = objFSO.GetParentFolderName(WScript.ScriptFullName)
+appPath = scriptDir & "\app.py"
+
+If Not objFSO.FileExists(appPath) Then
+    MsgBox "app.py が見つかりません。" & vbCrLf & _
+           "このファイル(起動.vbs)を、app.pyと同じフォルダに置いてください。" & vbCrLf & vbCrLf & _
+           "確認したパス: " & appPath, vbCritical, "起動エラー"
+    WScript.Quit
+End If
+
+' pythonw.exe (コンソール非表示版のPython) を優先的に探す。
+' 無ければ通常のpython.exeにフォールバックする。
+Dim cmd
+If IsPythonwAvailable() Then
+    cmd = "pythonw """ & appPath & """"
+Else
+    cmd = "python """ & appPath & """"
+End If
+
+' フォルダを作業ディレクトリに指定して実行(schema.sql等を正しく見つけるため)
+objShell.CurrentDirectory = scriptDir
+objShell.Run cmd, 0, False  ' 0 = ウィンドウ非表示, False = 完了を待たない
+
+Function IsPythonwAvailable()
+    On Error Resume Next
+    Dim exec
+    Set exec = objShell.Exec("where pythonw")
+    Do While exec.Status = 0
+        WScript.Sleep 50
+    Loop
+    IsPythonwAvailable = (exec.ExitCode = 0)
+    On Error Goto 0
+End Function

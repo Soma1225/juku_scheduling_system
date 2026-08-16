@@ -1,0 +1,27 @@
+# 個人情報を含むデータベースファイル(絶対にコミットしない)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# 個人情報を含む可能性のあるExcel/CSVファイル
+*.xlsx
+*.csv
+!*_template.xlsx
+
+# Python関連
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# エディタ関連
+.vscode/
+*.code-workspace
+
+# ログファイル
+*.log
+
+# OS関連
+.DS_Store
+Thumbs.db
