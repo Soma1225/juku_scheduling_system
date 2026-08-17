@@ -30,12 +30,13 @@ import page_students
 import page_instructors
 import page_subjects
 import page_terms
-import page_periods
 import page_availability
 import page_instructor_subjects
 import page_camps
 import page_camp_enrollments
 import page_camp_availability
+import page_regular_enrollments
+import page_student_detail
 
 PORT = 8000
 
@@ -47,7 +48,6 @@ ROUTES = {
     "/instructors": (page_instructors.render, page_instructors.handle_post),
     "/subjects": (page_subjects.render, page_subjects.handle_post),
     "/terms": (page_terms.render, page_terms.handle_post),
-    "/periods": (page_periods.render, page_periods.handle_post),
     "/student-availability": (page_availability.render_student, page_availability.handle_post_student),
     "/instructor-availability": (page_availability.render_instructor, page_availability.handle_post_instructor),
     "/instructor-subjects": (page_instructor_subjects.render, page_instructor_subjects.handle_post),
@@ -55,6 +55,8 @@ ROUTES = {
     "/camp-enrollments": (page_camp_enrollments.render, page_camp_enrollments.handle_post),
     "/camp-availability-student": (page_camp_availability.render_student, page_camp_availability.handle_post_student),
     "/camp-availability-instructor": (page_camp_availability.render_instructor, page_camp_availability.handle_post_instructor),
+    "/regular-enrollments": (page_regular_enrollments.render, page_regular_enrollments.handle_post),
+    "/student-detail": (page_student_detail.render, None),
 }
 
 

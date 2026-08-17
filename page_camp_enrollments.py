@@ -22,18 +22,48 @@ def insert_camp_enrollment(conn, camp_id, student_id, subject_id, contracted_cou
     return cur.lastrowid
 
 
+def grade_band_for_grade(base_grade: int) -> str | None:
+    """base_grade(1〜12の整数)から、SUBJECTS.grade_bandに対応する区分を返す。"""
+    if base_grade is None:
+        return None
+    if 1 <= base_grade <= 3:
+        return "小学生低学年"
+    if 4 <= base_grade <= 6:
+        return "小学生高学年"
+    if 7 <= base_grade <= 9:
+        return "中学生"
+    if 10 <= base_grade <= 12:
+        return "高校生"
+    return None
+
+
+def _get_student_grade_band(conn, student_id: str) -> str | None:
+    if not student_id:
+        return None
+    row = conn.execute("SELECT base_grade FROM STUDENTS WHERE student_id = ?", (student_id,)).fetchone()
+    return grade_band_for_grade(row[0]) if row else None
+
+
 def render(qs: dict, message_html: str = "") -> str:
     camp_id = qs.get("camp_id", [""])[0]
+    student_id = qs.get("student_id", [""])[0]
     conn = get_conn()
     camps = list_camps(conn)
     students = conn.execute(
         "SELECT student_id, last_name || ' ' || first_name FROM STUDENTS ORDER BY last_name_kana, first_name_kana"
     ).fetchall()
-    subjects = conn.execute(
-        "SELECT subject_id, subject_group || '/' || subject_name || '（' || grade_band || '）' FROM SUBJECTS "
-        "ORDER BY course_category, grade_band, subject_group"
-    ).fetchall()
     instructors = list_instructors(conn)
+
+    # 生徒が選ばれていれば、その学年に対応する科目だけに絞る
+    grade_band = _get_student_grade_band(conn, student_id)
+    if grade_band:
+        subjects = conn.execute(
+            "SELECT subject_id, subject_group || '/' || subject_name FROM SUBJECTS "
+            "WHERE grade_band = ? ORDER BY course_category, subject_group",
+            (grade_band,),
+        ).fetchall()
+    else:
+        subjects = []
 
     rows_html = ""
     if camp_id:
@@ -58,29 +88,21 @@ def render(qs: dict, message_html: str = "") -> str:
             f'<option value="{i}"{" selected" if str(i) == selected else ""}>{name}</option>' for i, name in rows
         )
 
-    table_html = ""
-    if camp_id:
-        table_html = f"""
-        <h1 style="font-size:14px;color:#534AB7;margin-top:26px;">この講習会の契約一覧</h1>
-        <table><tr><th>生徒</th><th>科目</th><th>コマ数</th><th>形式</th><th>指定講師</th></tr>{rows_html}</table>
-        """
+    subject_select = (
+        f'<select name="subject_id" required><option value="">選択してください</option>{options(subjects)}</select>'
+        if grade_band else
+        '<select disabled><option>先に生徒を選択してください</option></select>'
+    )
 
-    return f"""
-    <h1>講習会 受講契約登録</h1>
-    <div class="hint">紙の申込用紙に書かれたコマ数をそのまま入力してください</div>
-    {message_html}
-    <label>講習会</label>
-    <select id="camp_select" onchange="location.href='/camp-enrollments?camp_id='+this.value">
-      <option value="">選択してください</option>
-      {options(camps, camp_id)}
-    </select>
-    {f'''
+    form_html = f"""
     <form method="POST" action="/camp-enrollments">
       <input type="hidden" name="camp_id" value="{camp_id}">
       <label>生徒 <span class="req">*</span></label>
-      <select name="student_id" required><option value="">選択してください</option>{options(students)}</select>
+      <select name="student_id" required onchange="location.href='/camp-enrollments?camp_id={camp_id}&student_id='+this.value">
+        <option value="">選択してください</option>{options(students, student_id)}
+      </select>
       <label>科目 <span class="req">*</span></label>
-      <select name="subject_id" required><option value="">選択してください</option>{options(subjects)}</select>
+      {subject_select}
       <label>契約コマ数 <span class="req">*</span></label>
       <input type="number" name="contracted_count" min="1" value="1" required>
       <label>形式 <span class="req">*</span></label>
@@ -92,8 +114,26 @@ def render(qs: dict, message_html: str = "") -> str:
       <select name="assigned_instructor_id"><option value="">指定なし</option>{options(instructors)}</select>
       <button type="submit">登録する</button>
     </form>
+    """
+
+    table_html = ""
+    if camp_id:
+        table_html = f"""
+        <h1 style="font-size:14px;color:#534AB7;margin-top:26px;">この講習会の契約一覧</h1>
+        <table><tr><th>生徒</th><th>科目</th><th>コマ数</th><th>形式</th><th>指定講師</th></tr>{rows_html}</table>
+        """
+
+    return f"""
+    <h1>講習会 受講契約登録</h1>
+    <div class="hint">紙の申込用紙に書かれたコマ数をそのまま入力してください。生徒を選ぶと、その学年に対応する科目だけ選べます</div>
+    {message_html}
+    <label>講習会</label>
+    <select onchange="location.href='/camp-enrollments?camp_id='+this.value">
+      <option value="">選択してください</option>
+      {options(camps, camp_id)}
+    </select>
+    {form_html if camp_id else '<div class="hint">先に講習会を選択してください</div>'}
     {table_html}
-    ''' if camp_id else '<div class="hint">先に講習会を選択してください</div>'}
     """
 
 

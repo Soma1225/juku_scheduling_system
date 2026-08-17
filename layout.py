@@ -13,10 +13,11 @@ MENU = [
     ("/instructors", "講師登録"),
     ("/subjects", "科目マスタ"),
     ("/terms", "学期マスタ"),
-    ("/periods", "時限マスタ"),
     ("/student-availability", "生徒 対応可能時間"),
     ("/instructor-availability", "講師 対応可能時間"),
     ("/instructor-subjects", "講師 担当科目"),
+    ("/regular-enrollments", "通常授業 契約登録"),
+    ("/student-detail", "生徒詳細"),
     ("/camps", "講習会マスタ"),
     ("/camp-enrollments", "講習会 受講契約"),
     ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
@@ -59,6 +60,8 @@ _LAYOUT = """<!DOCTYPE html>
   th {{ color:#888; font-weight:normal; }}
   table.grid th, table.grid td {{ text-align:center; border:1px solid #e5e5e5; padding:6px; }}
   table.grid th:first-child, table.grid td:first-child {{ background:#f7f6f3; font-weight:bold; }}
+  table.grid .period-label {{ white-space:nowrap; font-size:11px; }}
+  table.grid th.closed-day, table.grid td.closed-day {{ background:#2c2c2a; color:#888; font-size:11px; }}
   input[type=checkbox] {{ width:18px; height:18px; }}
   .row-form {{ display:flex; gap:6px; align-items:center; }}
   .row-form select {{ width:70px; padding:4px; }}

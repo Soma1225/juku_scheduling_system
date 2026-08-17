@@ -7,11 +7,14 @@ page_camp_availability.py
 講習会期間中は「特定の日付ごと」に集める点が異なる。
 """
 
+from datetime import date as _date
 from db import get_conn
 from page_camps import list_camps
 from page_instructors import list_instructors
 
 PERIOD_NUMBERS = [1, 2, 3, 4, 5]
+PERIOD_LABEL_NUMERALS = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤"}
+WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 
 
 def _get_slot_ids_for_camp(conn, camp_id) -> list[tuple[int, str, int]]:
@@ -70,22 +73,45 @@ def _build_select_options(rows, selected_id) -> str:
     )
 
 
-def _build_grid(entity_id, camp_id, slot_rows, checked_slot_ids, form_action, id_field) -> str:
+def _get_period_labels(conn) -> dict[int, str]:
+    """例: {1: '①14:20〜15:40', 2: '②15:50〜17:10', ...}"""
+    rows = conn.execute("SELECT period_number, start_time, end_time FROM PERIODS ORDER BY period_number").fetchall()
+    return {p: f"{PERIOD_LABEL_NUMERALS.get(p, p)}{s}〜{e}" for p, s, e in rows}
+
+
+def _weekday_jp(date_str: str) -> str:
+    y, m, d = map(int, date_str.split("-"))
+    return WEEKDAY_JP[_date(y, m, d).weekday()]
+
+
+def _build_grid(conn, entity_id, camp_id, slot_rows, checked_slot_ids, form_action, id_field) -> str:
     dates = sorted(set(r[1] for r in slot_rows))
     slot_lookup = {(r[1], r[2]): r[0] for r in slot_rows}  # (date, period) -> slot_id
+    period_labels = _get_period_labels(conn)
 
-    day_headers = "".join(f"<th>{d[5:]}</th>" for d in dates)  # MM-DDだけ表示
+    day_headers = ""
+    for d in dates:
+        wd = _weekday_jp(d)
+        is_sunday = wd == "日"
+        cls = ' class="closed-day"' if is_sunday else ""
+        day_headers += f"<th{cls}>{d[5:]}<br>（{wd}）</th>"
+
     body_rows = ""
     for p in PERIOD_NUMBERS:
         cells = ""
         for d in dates:
+            wd = _weekday_jp(d)
+            if wd == "日":
+                # 日曜は休館日。列は残すが、入力自体をさせない(黒塗り表示)
+                cells += '<td class="closed-day">休館</td>'
+                continue
             sid = slot_lookup.get((d, p))
             if sid is None:
                 cells += "<td>-</td>"
                 continue
             checked = "checked" if sid in checked_slot_ids else ""
             cells += f'<td><input type="checkbox" name="slot_{sid}" {checked}></td>'
-        body_rows += f"<tr><td>{p}限</td>{cells}</tr>"
+        body_rows += f'<tr><td class="period-label">{period_labels.get(p, f"{p}限")}</td>{cells}</tr>'
 
     return f"""
     <form method="POST" action="{form_action}">
@@ -120,7 +146,7 @@ def render_student(qs: dict, message_html: str = "") -> str:
         slot_rows = _get_slot_ids_for_camp(conn, int(camp_id))
         checked = _get_available_slot_ids(conn, "CAMP_STUDENT_AVAILABILITY", "student_id", int(student_id), int(camp_id))
         if slot_rows:
-            grid_html = _build_grid(student_id, camp_id, slot_rows, checked, "/camp-availability-student", "student_id")
+            grid_html = _build_grid(conn, student_id, camp_id, slot_rows, checked, "/camp-availability-student", "student_id")
         else:
             grid_html = '<div class="hint">この講習会の日付枠がまだありません</div>'
     conn.close()
@@ -166,7 +192,7 @@ def render_instructor(qs: dict, message_html: str = "") -> str:
         slot_rows = _get_slot_ids_for_camp(conn, int(camp_id))
         checked = _get_available_slot_ids(conn, "CAMP_INSTRUCTOR_AVAILABILITY", "instructor_id", int(instructor_id), int(camp_id))
         if slot_rows:
-            grid_html = _build_grid(instructor_id, camp_id, slot_rows, checked, "/camp-availability-instructor", "instructor_id")
+            grid_html = _build_grid(conn, instructor_id, camp_id, slot_rows, checked, "/camp-availability-instructor", "instructor_id")
         else:
             grid_html = '<div class="hint">この講習会の日付枠がまだありません</div>'
     conn.close()
