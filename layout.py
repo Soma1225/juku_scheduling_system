@@ -17,6 +17,10 @@ MENU = [
     ("/student-availability", "生徒 対応可能時間"),
     ("/instructor-availability", "講師 対応可能時間"),
     ("/instructor-subjects", "講師 担当科目"),
+    ("/camps", "講習会マスタ"),
+    ("/camp-enrollments", "講習会 受講契約"),
+    ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
+    ("/camp-availability-instructor", "講師 講習会中の対応可能時間"),
 ]
 
 ROUTE_TITLES = {path: label for path, label in MENU}

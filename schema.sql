@@ -110,6 +110,7 @@ CREATE TABLE INSTRUCTOR_SUBJECTS (
 
 CREATE TABLE SESSIONS (
     session_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    camp_id       INTEGER REFERENCES CAMPS(camp_id),  -- どの講習会で生成されたか。NULL可(将来通常期にも使う可能性を残す)
     slot_id       INTEGER NOT NULL REFERENCES TIME_SLOTS(slot_id),
     instructor_id INTEGER NOT NULL REFERENCES INSTRUCTORS(instructor_id),
     UNIQUE (slot_id, instructor_id)   -- 同じ講師が同じ枠に複数セッションを持つことはない
@@ -144,6 +145,44 @@ CREATE TABLE STUDENT_HS_EXAM_INFO (
     student_id  INTEGER PRIMARY KEY REFERENCES STUDENTS(student_id),
     exam_method TEXT NOT NULL
         CHECK (exam_method IN ('私立専願', '持ち上がり', '公立専願', '併願'))
+);
+
+-- ---------------------------------------------------------
+-- 6. 講習会
+-- ---------------------------------------------------------
+
+CREATE TABLE CAMPS (
+    camp_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    camp_name           TEXT NOT NULL,          -- 例: 2026年 春期講習
+    planned_start_date   TEXT NOT NULL,          -- 組んでほしい開始日(目標。はみ出す場合あり)
+    planned_end_date     TEXT NOT NULL
+);
+
+CREATE TABLE CAMP_COURSE_ENROLLMENTS (
+    enrollment_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    camp_id                INTEGER NOT NULL REFERENCES CAMPS(camp_id),
+    student_id             INTEGER NOT NULL REFERENCES STUDENTS(student_id),
+    subject_id             INTEGER NOT NULL REFERENCES SUBJECTS(subject_id),
+    contracted_count        INTEGER NOT NULL,     -- 紙に書かれた契約コマ数
+    format                 TEXT NOT NULL DEFAULT '1:2'
+        CHECK (format IN ('1:1', '1:2')),
+    assigned_instructor_id  INTEGER REFERENCES INSTRUCTORS(instructor_id)  -- 例外対応時の指定講師。NULL可
+);
+
+CREATE TABLE CAMP_STUDENT_AVAILABILITY (
+    availability_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id      INTEGER NOT NULL REFERENCES STUDENTS(student_id),
+    slot_id         INTEGER NOT NULL REFERENCES TIME_SLOTS(slot_id),   -- 日付×限が既に紐づく
+    is_available    INTEGER NOT NULL CHECK (is_available IN (0, 1)),
+    UNIQUE (student_id, slot_id)
+);
+
+CREATE TABLE CAMP_INSTRUCTOR_AVAILABILITY (
+    availability_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instructor_id   INTEGER NOT NULL REFERENCES INSTRUCTORS(instructor_id),
+    slot_id         INTEGER NOT NULL REFERENCES TIME_SLOTS(slot_id),
+    is_available    INTEGER NOT NULL CHECK (is_available IN (0, 1)),
+    UNIQUE (instructor_id, slot_id)
 );
 
 -- ---------------------------------------------------------

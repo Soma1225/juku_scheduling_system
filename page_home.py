@@ -6,7 +6,8 @@ from layout import MENU
 ICONS = {
     "/students": "🎓", "/instructors": "🧑‍🏫", "/subjects": "📚", "/terms": "🗓️",
     "/periods": "⏰", "/student-availability": "🗂️", "/instructor-availability": "🗂️",
-    "/instructor-subjects": "🔗",
+    "/instructor-subjects": "🔗", "/camps": "🏕️", "/camp-enrollments": "📝",
+    "/camp-availability-student": "📅", "/camp-availability-instructor": "📅",
 }
 DESCRIPTIONS = {
     "/students": "生徒の氏名・学年などを登録します",
@@ -17,6 +18,10 @@ DESCRIPTIONS = {
     "/student-availability": "生徒の通塾可能な曜日・限を登録します",
     "/instructor-availability": "講師の勤務可能な曜日・限を登録します",
     "/instructor-subjects": "講師が担当できる科目を登録します",
+    "/camps": "春期・夏期などの講習会を登録します",
+    "/camp-enrollments": "講習会の受講契約(科目・コマ数)を登録します",
+    "/camp-availability-student": "講習会期間中、生徒が対応可能な日付・限を登録します",
+    "/camp-availability-instructor": "講習会期間中、講師が対応可能な日付・限を登録します",
 }
 
 

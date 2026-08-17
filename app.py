@@ -33,6 +33,9 @@ import page_terms
 import page_periods
 import page_availability
 import page_instructor_subjects
+import page_camps
+import page_camp_enrollments
+import page_camp_availability
 
 PORT = 8000
 
@@ -48,6 +51,10 @@ ROUTES = {
     "/student-availability": (page_availability.render_student, page_availability.handle_post_student),
     "/instructor-availability": (page_availability.render_instructor, page_availability.handle_post_instructor),
     "/instructor-subjects": (page_instructor_subjects.render, page_instructor_subjects.handle_post),
+    "/camps": (page_camps.render, page_camps.handle_post),
+    "/camp-enrollments": (page_camp_enrollments.render, page_camp_enrollments.handle_post),
+    "/camp-availability-student": (page_camp_availability.render_student, page_camp_availability.handle_post_student),
+    "/camp-availability-instructor": (page_camp_availability.render_instructor, page_camp_availability.handle_post_instructor),
 }
 
 
