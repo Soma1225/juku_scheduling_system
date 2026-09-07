@@ -5,6 +5,7 @@ import html
 from db import get_conn, get_current_academic_fiscal_year
 from image_import_service import create_import_batch
 from image_import_commit import DEFAULT_BACKUP_DIR
+from image_import_db import find_camp_enrollment_duplicates, get_matching_camp_enrollments
 from image_import_config import (
     choose_backup_directory,
     load_backup_directory,
@@ -15,6 +16,9 @@ from image_import_config import (
 def render(qs: dict, message_html: str = "") -> str:
     backup_directory = load_backup_directory(DEFAULT_BACKUP_DIR)
     conn = get_conn()
+    enrollment_count = conn.execute(
+        "SELECT COUNT(*) FROM CAMP_COURSE_ENROLLMENTS"
+    ).fetchone()[0]
     camps = conn.execute(
         "SELECT camp_id,camp_name,planned_start_date,planned_end_date "
         "FROM CAMPS ORDER BY planned_start_date DESC"
@@ -61,6 +65,17 @@ def render(qs: dict, message_html: str = "") -> str:
         <button type="submit" style="margin:0;width:auto;padding:8px 14px;">エクスプローラーで保存先を選択</button>
       </form>
     </div>
+    <div style="border:1px solid #e5e5e5;border-radius:8px;padding:12px 14px;margin:16px 0;">
+      <div style="font-size:13px;font-weight:bold;">本番DBの重複安全確認</div>
+      <div class="hint" style="margin:5px 0 8px;">
+        現在の講習会受講契約は{enrollment_count}件です。同一の「講習会・生徒・科目」が
+        複数行ないかを、DBを書き換えずに確認します。
+      </div>
+      <form method="POST" action="/image-import">
+        <input type="hidden" name="action" value="check_enrollment_duplicates">
+        <button type="submit" style="margin:0;width:auto;padding:8px 14px;">重複を確認</button>
+      </form>
+    </div>
     <form method="POST" action="/image-import" enctype="multipart/form-data">
       <input type="hidden" name="action" value="upload">
       <label>対象講習会 <span class="req">*</span></label>
@@ -85,6 +100,31 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
         return fields.get(key, [default])[0]
 
     action = get("action")
+    if action == "check_enrollment_duplicates":
+        duplicates = find_camp_enrollment_duplicates(conn)
+        total = conn.execute("SELECT COUNT(*) FROM CAMP_COURSE_ENROLLMENTS").fetchone()[0]
+        if not duplicates:
+            return (
+                '<div class="msg success">重複はありませんでした。'
+                f'確認対象: {total}件。DBへの変更は行っていません。</div>',
+                {},
+            )
+        details = []
+        for duplicate in duplicates:
+            rows = get_matching_camp_enrollments(
+                conn, duplicate.camp_id, duplicate.student_id, duplicate.subject_id,
+            )
+            row_ids = ", ".join(str(row[0]) for row in rows)
+            details.append(
+                f"講習会ID={duplicate.camp_id}、生徒ID={duplicate.student_id}、"
+                f"科目ID={duplicate.subject_id}（{duplicate.row_count}件、登録ID: {row_ids}）"
+            )
+        detail_html = "<br>".join(html.escape(detail) for detail in details)
+        return (
+            '<div class="msg error">重複が見つかりました。自動で削除・統合はしません。<br>'
+            f'{detail_html}<br>確認対象: {total}件。</div>',
+            {},
+        )
     if action == "choose_backup_folder":
         current = load_backup_directory(DEFAULT_BACKUP_DIR)
         selected = choose_backup_directory(current)
