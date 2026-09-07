@@ -11,9 +11,11 @@ page_schedule_view.py
 """
 
 import datetime
+import html
 from db import get_conn
 from page_camps import list_camps
 from page_instructors import list_instructors
+from page_home import get_follow_schedule_for_date, get_schedule_for_date
 
 WEEKDAY_JP = ["月", "火", "水", "木", "金", "土", "日"]
 PERIOD_NUMBERS = [1, 2, 3, 4, 5]
@@ -124,68 +126,63 @@ def render_by_day(qs: dict, message_html: str = "") -> str:
 
 
 # ---------------------------------------------------------
-# 共通: 講師/生徒の時間割グリッド組み立て
+# 共通: 講師/生徒の日付別時間割グリッド組み立て
 # ---------------------------------------------------------
 
-def _build_timetable_grid(conn, camp_id: int, role: str, entity_id: int) -> str:
-    """role='instructor' または 'student' の、日付×限グリッドを組み立てる。"""
-    dates = _camp_dates(conn, camp_id)
-    if not dates:
-        return '<div class="hint">この講習会にはまだ時間割が組まれていません</div>'
+def _parse_target_date(value: str | None) -> datetime.date:
+    try:
+        return datetime.date.fromisoformat(value) if value else datetime.date.today()
+    except ValueError:
+        return datetime.date.today()
 
+
+def _build_timetable_grid(conn, records: list[dict], role: str, empty_message: str) -> str:
+    """ホーム画面と同じレコード形式から、対象者1人の5限グリッドを作る。"""
     period_labels = _get_period_labels(conn)
+    by_period: dict[int, list[dict]] = {period: [] for period in PERIOD_NUMBERS}
+    for record in records:
+        if record["period"] in by_period:
+            by_period[record["period"]].append(record)
+    if not any(by_period.values()):
+        return f'<div class="hint">{html.escape(empty_message)}</div>'
 
-    if role == "instructor":
-        cell_rows = conn.execute(
-            """SELECT ts.session_date, ts.period_number, s.session_id
-               FROM SESSIONS s JOIN TIME_SLOTS ts ON ts.slot_id = s.slot_id
-               WHERE s.camp_id = ? AND s.instructor_id = ?""",
-            (camp_id, entity_id),
-        ).fetchall()
-    else:
-        cell_rows = conn.execute(
-            """SELECT ts.session_date, ts.period_number, s.session_id
-               FROM ASSIGNMENTS a
-               JOIN SESSIONS s ON s.session_id = a.session_id
-               JOIN TIME_SLOTS ts ON ts.slot_id = s.slot_id
-               WHERE s.camp_id = ? AND a.student_id = ?""",
-            (camp_id, entity_id),
-        ).fetchall()
-
-    cell_content: dict[tuple[str, int], list[str]] = {}
-    for session_date, period_number, session_id in cell_rows:
-        if role == "instructor":
-            members = conn.execute(
-                """SELECT st.last_name || st.first_name, sub.subject_group || '/' || sub.subject_name
-                   FROM ASSIGNMENTS a JOIN STUDENTS st ON st.student_id = a.student_id
-                   JOIN SUBJECTS sub ON sub.subject_id = a.subject_id WHERE a.session_id = ?""",
-                (session_id,),
-            ).fetchall()
-            text = "<br>".join(f"{name}<br><small>{subj}</small>" for name, subj in members)
-        else:
-            row = conn.execute(
-                """SELECT sub.subject_group || '/' || sub.subject_name, i.last_name || i.first_name
-                   FROM ASSIGNMENTS a JOIN SUBJECTS sub ON sub.subject_id = a.subject_id
-                   JOIN SESSIONS s ON s.session_id = a.session_id
-                   JOIN INSTRUCTORS i ON i.instructor_id = s.instructor_id
-                   WHERE a.session_id = ? AND a.student_id = ?""",
-                (session_id, entity_id),
-            ).fetchone()
-            text = f"{row[0]}<br><small>{row[1]}</small>" if row else ""
-        cell_content[(session_date, period_number)] = text
-
-    day_headers = "".join(f"<th>{d[5:]}<br>（{_weekday_jp(d)}）</th>" for d in dates)
-    body_rows = ""
-    for p in PERIOD_NUMBERS:
-        cells = ""
-        for d in dates:
-            content = cell_content.get((d, p), "")
-            cells += f"<td>{content}</td>"
-        body_rows += f'<tr><td class="period-label">{period_labels.get(p, f"{p}限")}</td>{cells}</tr>'
-
+    headers = "".join(
+        f'<th>{html.escape(period_labels.get(period, f"{period}限"))}</th>'
+        for period in PERIOD_NUMBERS
+    )
+    cells = ""
+    for period in PERIOD_NUMBERS:
+        entries = []
+        for record in by_period[period]:
+            if role == "instructor":
+                primary = record["student_name"]
+            else:
+                primary = record["instructor_name"]
+            subject = record["subject_name"] or record["subject_group"]
+            entries.append(
+                '<div style="padding:7px 4px;border-bottom:1px solid #e5e5e5;">'
+                f'{html.escape(primary)}<br><small>{html.escape(subject)}</small></div>'
+            )
+        cells += f'<td style="vertical-align:top;min-width:150px;">{"".join(entries) or "-"}</td>'
     return f"""
     <div style="overflow-x:auto;">
-      <table class="grid"><tr><th>限＼日付</th>{day_headers}</tr>{body_rows}</table>
+      <table class="grid"><tr>{headers}</tr><tr>{cells}</tr></table>
+    </div>
+    """
+
+
+def _date_navigation(path: str, target_date: datetime.date, entity_param: str, entity_id: str) -> str:
+    previous_date = (target_date - datetime.timedelta(days=1)).isoformat()
+    next_date = (target_date + datetime.timedelta(days=1)).isoformat()
+    current_date = target_date.isoformat()
+    entity_query = f'&{entity_param}={entity_id}' if entity_id else ""
+    return f"""
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:16px 0;">
+      <a href="{path}?date={previous_date}{entity_query}">← 前日</a>
+      <input type="date" value="{current_date}"
+             onchange="location.href='{path}?date='+this.value+'&{entity_param}={entity_id}'">
+      <span>{target_date.year}年{target_date.month}月{target_date.day}日（{_weekday_jp(current_date)}）</span>
+      <a href="{path}?date={next_date}{entity_query}">翌日 →</a>
     </div>
     """
 
@@ -195,30 +192,37 @@ def _build_timetable_grid(conn, camp_id: int, role: str, entity_id: int) -> str:
 # ---------------------------------------------------------
 
 def render_instructor_view(qs: dict, message_html: str = "") -> str:
-    camp_id = qs.get("camp_id", [""])[0]
+    target_date = _parse_target_date(qs.get("date", [None])[0])
     instructor_id = qs.get("instructor_id", [""])[0]
     conn = get_conn()
-    camps = list_camps(conn)
     instructors = list_instructors(conn)
-
-    grid_html = ""
-    if camp_id and instructor_id:
-        grid_html = _build_timetable_grid(conn, int(camp_id), "instructor", int(instructor_id))
+    grid_html = follow_html = ""
+    if instructor_id:
+        entity_id = int(instructor_id)
+        records = [
+            record for record in get_schedule_for_date(conn, target_date)
+            if record["instructor_id"] == entity_id
+        ]
+        follow_records = [
+            record for record in get_follow_schedule_for_date(conn, target_date)
+            if record["instructor_id"] == entity_id
+        ]
+        grid_html = _build_timetable_grid(conn, records, "instructor", "この日の授業予定はありません")
+        follow_html = _build_timetable_grid(conn, follow_records, "instructor", "この日の教科フォローはありません")
     conn.close()
 
     return f"""
     <h1>講師視点の時間割</h1>
-    <div class="hint">講習会と講師を選ぶと、その講師の時間割を確認できます</div>
+    <div class="hint">日付と講師を選ぶと、通常授業と講習会をまとめて確認できます</div>
     {message_html}
-    <label>講習会</label>
-    <select onchange="location.href='/schedule-instructor?camp_id='+this.value+'&instructor_id={instructor_id}'">
-      <option value="">選択してください</option>{_options(camps, camp_id)}
-    </select>
+    {_date_navigation('/schedule-instructor', target_date, 'instructor_id', instructor_id)}
     <label>講師</label>
-    <select onchange="location.href='/schedule-instructor?camp_id={camp_id}&instructor_id='+this.value">
+    <select onchange="location.href='/schedule-instructor?date={target_date.isoformat()}&instructor_id='+this.value">
       <option value="">選択してください</option>{_options(instructors, instructor_id)}
     </select>
-    {grid_html if (camp_id and instructor_id) else '<div class="hint">講習会と講師を両方選択してください</div>'}
+    {('<h2 style="margin-top:24px;">通常授業・講習会</h2>' + grid_html +
+      '<h2 style="margin-top:26px;">教科フォロー</h2>' + follow_html)
+      if instructor_id else '<div class="hint">講師を選択してください</div>'}
     """
 
 
@@ -227,30 +231,37 @@ def render_instructor_view(qs: dict, message_html: str = "") -> str:
 # ---------------------------------------------------------
 
 def render_student_view(qs: dict, message_html: str = "") -> str:
-    camp_id = qs.get("camp_id", [""])[0]
+    target_date = _parse_target_date(qs.get("date", [None])[0])
     student_id = qs.get("student_id", [""])[0]
     conn = get_conn()
-    camps = list_camps(conn)
     students = conn.execute(
         "SELECT student_id, last_name || ' ' || first_name FROM STUDENTS ORDER BY last_name_kana, first_name_kana"
     ).fetchall()
-
-    grid_html = ""
-    if camp_id and student_id:
-        grid_html = _build_timetable_grid(conn, int(camp_id), "student", int(student_id))
+    grid_html = follow_html = ""
+    if student_id:
+        entity_id = int(student_id)
+        records = [
+            record for record in get_schedule_for_date(conn, target_date)
+            if record["student_id"] == entity_id
+        ]
+        follow_records = [
+            record for record in get_follow_schedule_for_date(conn, target_date)
+            if record["student_id"] == entity_id
+        ]
+        grid_html = _build_timetable_grid(conn, records, "student", "この日の授業予定はありません")
+        follow_html = _build_timetable_grid(conn, follow_records, "student", "この日の教科フォローはありません")
     conn.close()
 
     return f"""
     <h1>生徒視点の時間割</h1>
-    <div class="hint">講習会と生徒を選ぶと、その生徒の時間割を確認できます</div>
+    <div class="hint">日付と生徒を選ぶと、通常授業と講習会をまとめて確認できます</div>
     {message_html}
-    <label>講習会</label>
-    <select onchange="location.href='/schedule-student?camp_id='+this.value+'&student_id={student_id}'">
-      <option value="">選択してください</option>{_options(camps, camp_id)}
-    </select>
+    {_date_navigation('/schedule-student', target_date, 'student_id', student_id)}
     <label>生徒</label>
-    <select onchange="location.href='/schedule-student?camp_id={camp_id}&student_id='+this.value">
+    <select onchange="location.href='/schedule-student?date={target_date.isoformat()}&student_id='+this.value">
       <option value="">選択してください</option>{_options(students, student_id)}
     </select>
-    {grid_html if (camp_id and student_id) else '<div class="hint">講習会と生徒を両方選択してください</div>'}
+    {('<h2 style="margin-top:24px;">通常授業・講習会</h2>' + grid_html +
+      '<h2 style="margin-top:26px;">教科フォロー</h2>' + follow_html)
+      if student_id else '<div class="hint">生徒を選択してください</div>'}
     """
