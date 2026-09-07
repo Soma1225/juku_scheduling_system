@@ -142,12 +142,6 @@ class StudentConfirmationTests(unittest.TestCase):
             ).fetchone(),
             ("CORRECTED", "候補外生徒"),
         )
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT source,status,returned_page_id FROM CAMP_FORM_DISTRIBUTIONS"
-            ).fetchone(),
-            ("SCAN_DISCOVERED", "RETURNED", 1),
-        )
 
 
 if __name__ == "__main__":

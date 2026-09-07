@@ -13,7 +13,6 @@ from availability_recognition import store_availability_candidates
 from free_text_capture import capture_free_text
 from student_image_matching import recognize_student_candidates
 from subject_resolution import resolve_page_subjects
-from camp_form_tracking import record_scanned_return
 
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
@@ -180,10 +179,6 @@ def create_import_batch(
                     paper_fiscal_year=paper_fiscal_year,
                     layout_quality=preprocess_result.layout_quality,
                 )
-                if selected_student_id is not None:
-                    record_scanned_return(
-                        conn, page_id=page_cursor.lastrowid, student_id=selected_student_id,
-                    )
                 recognition_requires_review |= selected_student_id is None
                 page_id = page_cursor.lastrowid
                 recognition_requires_review |= bool(

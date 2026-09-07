@@ -6,7 +6,6 @@ from pathlib import Path
 MIGRATION_DIR = Path(__file__).with_name("migrations")
 MIGRATIONS = (
     ("001_image_import_v6", MIGRATION_DIR / "001_image_import_v6.sql"),
-    ("002_camp_form_distribution", MIGRATION_DIR / "002_camp_form_distribution.sql"),
 )
 
 

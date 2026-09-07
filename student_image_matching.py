@@ -229,8 +229,6 @@ def confirm_student_match(
             """,
             (resolution, corrected_value, operator_instructor_id, now, review[0]),
         )
-        from camp_form_tracking import record_scanned_return
-        record_scanned_return(conn, page_id=page_id, student_id=chosen[0])
         after_value = dict(before_value)
         after_value.update(
             match_status="MANUALLY_CONFIRMED",
@@ -368,8 +366,6 @@ def confirm_student_by_master(
             """,
             (student_name, operator_instructor_id, now, review[0]),
         )
-        from camp_form_tracking import record_scanned_return
-        record_scanned_return(conn, page_id=page_id, student_id=student_id)
         conn.execute(
             """
             INSERT INTO IMAGE_IMPORT_AUDIT_LOG

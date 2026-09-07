@@ -49,7 +49,6 @@ import page_excel_import
 import page_image_import
 import page_image_import_review
 import page_image_import_corrections
-import page_camp_form_tracking
 from image_import_service import DEFAULT_STORAGE_ROOT
 
 PORT = 8000
@@ -81,7 +80,6 @@ ROUTES = {
     "/image-import": (page_image_import.render, page_image_import.handle_post),
     "/image-import-review": (page_image_import_review.render, page_image_import_review.handle_post),
     "/image-import-corrections": (page_image_import_corrections.render, page_image_import_corrections.handle_post),
-    "/camp-form-tracking": (page_camp_form_tracking.render, page_camp_form_tracking.handle_post),
 }
 
 
