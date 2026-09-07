@@ -5,7 +5,7 @@ import html
 from db import get_conn
 from student_image_matching import confirm_student_by_master, confirm_student_match
 from handwritten_counts import confirm_subject_counts
-from availability_recognition import confirm_availability_cells
+from availability_recognition import confirm_availability_cells, resolve_availability_exception
 from subject_resolution import (
     confirm_page_subjects,
     list_manual_subject_options,
@@ -56,6 +56,7 @@ def render(qs: dict, message_html: str = "") -> str:
     subject_options_map = {}
     availability_summary_map = {}
     ambiguous_availability_map = {}
+    availability_exception_map = {}
     attachment_map = {}
     for page in pages:
         candidate_map[page[0]] = conn.execute(
@@ -113,6 +114,21 @@ def render(qs: dict, message_html: str = "") -> str:
              AND r.item_type='AVAILABILITY_AMBIGUOUS'
              AND r.resolution='PENDING' AND r.is_deleted=0
             WHERE a.page_id=? AND a.availability_status='AMBIGUOUS' AND a.is_deleted=0
+            ORDER BY a.session_date,a.period_number
+            """,
+            (page[0],),
+        ).fetchall()
+        availability_exception_map[page[0]] = conn.execute(
+            """
+            SELECT a.import_availability_id,a.session_date,a.period_number,
+                   a.availability_status,r.review_item_id
+            FROM IMAGE_IMPORT_AVAILABILITY a
+            JOIN IMAGE_IMPORT_REVIEW_ITEMS r
+              ON r.related_availability_id=a.import_availability_id
+             AND r.item_type=a.availability_status
+             AND r.resolution='PENDING' AND r.is_deleted=0
+            WHERE a.page_id=? AND a.availability_status IN ('SLOT_NOT_FOUND','OUT_OF_CAMP_RANGE')
+              AND a.is_deleted=0
             ORDER BY a.session_date,a.period_number
             """,
             (page[0],),
@@ -259,6 +275,7 @@ def render(qs: dict, message_html: str = "") -> str:
             )
         )
         ambiguous_cells = [] if is_skipped else ambiguous_availability_map[page_id]
+        exception_cells = [] if is_skipped else availability_exception_map[page_id]
         availability_form = ""
         if availability_summary:
             ambiguous_rows = "".join(
@@ -289,6 +306,40 @@ def render(qs: dict, message_html: str = "") -> str:
                 availability_form = (
                     f'<h1 style="font-size:14px;margin-top:22px;">対応可能時間</h1>'
                     f'<div class="hint">{availability_summary_html}</div>'
+                )
+            if exception_cells:
+                exception_rows = ""
+                for availability_id, session_date, period_number, exception_status, review_item_id in exception_cells:
+                    if exception_status == "SLOT_NOT_FOUND":
+                        resolution_control = (
+                            '<select name="exception_resolution" required style="width:140px;">'
+                            '<option value="">選択</option><option value="AVAILABLE">対応可</option>'
+                            '<option value="UNAVAILABLE">対応不可</option></select>'
+                        )
+                        operation = "時間枠登録後に再照合"
+                    else:
+                        resolution_control = '<input type="hidden" name="exception_resolution" value="EXCLUDE">期間外として除外'
+                        operation = "取込対象外として確認"
+                    exception_rows += f"""
+                    <tr><td>{session_date}</td><td>{period_number}限</td>
+                    <td>{'枠未登録' if exception_status == 'SLOT_NOT_FOUND' else '期間外'}</td>
+                    <td><img src="/image-import-review-crop?review_item_id={review_item_id}"
+                        style="width:90px;max-height:60px;object-fit:contain;border:1px solid #ddd;"></td>
+                    <td><form method="POST" action="/image-import-review" class="operator-required-form" style="margin:0;">
+                      <input type="hidden" name="action" value="resolve_availability_exception">
+                      <input type="hidden" name="batch_id" value="{batch_id}">
+                      <input type="hidden" name="page_id" value="{page_id}">
+                      <input type="hidden" name="import_availability_id" value="{availability_id}">
+                      <div class="hint">{operation}</div>{resolution_control}
+                      <select name="operator_instructor_id" class="remembered-operator" required>{operator_options}</select>
+                      <button type="submit">この項目を解決</button>
+                    </form></td></tr>
+                    """
+                availability_form += (
+                    '<h1 style="font-size:14px;margin-top:18px;">時間枠・期間の確認</h1>'
+                    '<div class="hint">枠未登録は、講習会の日程を登録してから対応可否を確定してください。</div>'
+                    '<table><tr><th>日付</th><th>限</th><th>状態</th><th>画像</th><th>解決操作</th></tr>'
+                    f'{exception_rows}</table>'
                 )
         attachment_rows = attachment_map[page_id]
         attachment_html = ""
@@ -402,6 +453,7 @@ def render(qs: dict, message_html: str = "") -> str:
     <div class="hint">{html.escape(batch[1])} ／ {batch[2]}年度 {html.escape(batch[3])} ／ {batch[4]}</div>
     {message_html}
     <a href="/image-import" style="font-size:13px;">← PDF取り込みへ戻る</a>
+    <span style="margin-left:16px;"><a href="/image-import-corrections?batch_id={batch_id}" style="font-size:13px;">確定済みレビューを訂正</a></span>
     <h1 style="font-size:15px;margin-top:24px;">本登録前の確認</h1>
     {import_panel}
     {page_cards}
@@ -426,7 +478,7 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
         return fields.get(key, [default])[0]
 
     action = get("action")
-    if action not in ("confirm_student", "confirm_student_master", "confirm_counts", "confirm_subjects", "confirm_availability", "import_batch", "skip_page", "restore_page"):
+    if action not in ("confirm_student", "confirm_student_master", "confirm_counts", "confirm_subjects", "confirm_availability", "resolve_availability_exception", "import_batch", "skip_page", "restore_page"):
         raise ValueError("不明な操作です")
     try:
         batch_id = int(get("batch_id"))
@@ -461,6 +513,19 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
         )
         message = "除外したページを確認待ちへ戻しました"
         return f'<div class="msg success">{message}</div>', {"batch_id": [str(batch_id)]}
+    if action == "resolve_availability_exception":
+        try:
+            import_availability_id = int(get("import_availability_id"))
+        except (TypeError, ValueError):
+            raise ValueError("対象の時間枠を選択してください")
+        message = resolve_availability_exception(
+            conn,
+            page_id=page_id,
+            import_availability_id=import_availability_id,
+            resolution=get("exception_resolution"),
+            operator_instructor_id=operator_id,
+        )
+        return f'<div class="msg success">{html.escape(message)}</div>', {"batch_id": [str(batch_id)]}
     if action == "confirm_student":
         try:
             page_student_id = int(get("page_student_id"))

@@ -343,3 +343,156 @@ def confirm_availability_cells(
         conn.rollback()
         raise
     return len(rows)
+
+
+def resolve_availability_exception(
+    conn,
+    *,
+    page_id: int,
+    import_availability_id: int,
+    resolution: str,
+    operator_instructor_id: int,
+) -> str:
+    """枠未登録または期間外のセルを、証跡を残して解決する。
+
+    ``SLOT_NOT_FOUND`` は時間枠を再照合して AVAILABLE/UNAVAILABLE を確定する。
+    ``OUT_OF_CAMP_RANGE`` は EXCLUDE で候補を論理削除し、元画像とレビューは残す。
+    """
+    operator = conn.execute(
+        "SELECT last_name,first_name FROM INSTRUCTORS WHERE instructor_id=? AND status='在籍'",
+        (operator_instructor_id,),
+    ).fetchone()
+    if not operator:
+        raise ValueError("在籍中の担当講師を選択してください")
+    row = conn.execute(
+        """
+        SELECT a.session_date,a.period_number,a.availability_status,r.review_item_id,
+               p.batch_id,b.status,b.school_id,b.school_name
+        FROM IMAGE_IMPORT_AVAILABILITY a
+        JOIN IMAGE_IMPORT_REVIEW_ITEMS r
+          ON r.related_availability_id=a.import_availability_id
+         AND r.item_type=a.availability_status
+         AND r.resolution='PENDING' AND r.is_deleted=0
+        JOIN IMAGE_IMPORT_PAGES p ON p.page_id=a.page_id
+        JOIN IMAGE_IMPORT_BATCHES b ON b.batch_id=p.batch_id
+        WHERE a.import_availability_id=? AND a.page_id=? AND a.is_deleted=0
+          AND a.availability_status IN ('SLOT_NOT_FOUND','OUT_OF_CAMP_RANGE')
+          AND p.is_deleted=0 AND b.is_deleted=0
+        """,
+        (import_availability_id, page_id),
+    ).fetchone()
+    if not row:
+        raise ValueError("未解決の時間枠例外が見つかりません")
+    session_date, period_number, old_status, review_item_id, batch_id, batch_status, school_id, school_name = row
+    if batch_status == "IMPORTED":
+        raise ValueError("本登録済みバッチは変更できません")
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    operator_name = f"{operator[0]}{operator[1]}"
+    before = {
+        "availability_status": old_status,
+        "session_date": session_date,
+        "period_number": period_number,
+    }
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if old_status == "SLOT_NOT_FOUND":
+            if resolution not in ("AVAILABLE", "UNAVAILABLE"):
+                raise ValueError("対応可または対応不可を選択してください")
+            slot = conn.execute(
+                "SELECT slot_id FROM TIME_SLOTS WHERE session_date=? AND period_number=?",
+                (session_date, period_number),
+            ).fetchone()
+            if not slot:
+                raise ValueError("時間枠がまだ登録されていません。講習会の日程を確認してください")
+            value = 1 if resolution == "AVAILABLE" else 0
+            conn.execute(
+                """
+                UPDATE IMAGE_IMPORT_AVAILABILITY
+                SET matched_slot_id=?,resolved_is_available=?,
+                    availability_status='MANUALLY_CONFIRMED',
+                    reviewed_by_instructor_id=?,reviewed_at=?
+                WHERE import_availability_id=?
+                """,
+                (slot[0], value, operator_instructor_id, now, import_availability_id),
+            )
+            corrected_text = "対応可" if value else "対応不可"
+            conn.execute(
+                """
+                UPDATE IMAGE_IMPORT_REVIEW_ITEMS
+                SET resolution='CORRECTED',corrected_value_text=?,
+                    resolved_by_instructor_id=?,resolved_at=?
+                WHERE review_item_id=?
+                """,
+                (corrected_text, operator_instructor_id, now, review_item_id),
+            )
+            action_type = "CORRECT"
+            after = {
+                "availability_status": "MANUALLY_CONFIRMED",
+                "matched_slot_id": slot[0],
+                "resolved_is_available": value,
+                "resolution_reason": "時間枠登録後に再照合",
+            }
+            message = f"{session_date} {period_number}限を再照合して{corrected_text}で確定しました"
+        else:
+            if resolution != "EXCLUDE":
+                raise ValueError("期間外として除外を選択してください")
+            conn.execute(
+                "UPDATE IMAGE_IMPORT_AVAILABILITY SET is_deleted=1 WHERE import_availability_id=?",
+                (import_availability_id,),
+            )
+            conn.execute(
+                """
+                UPDATE IMAGE_IMPORT_REVIEW_ITEMS
+                SET resolution='REJECTED',resolved_by_instructor_id=?,resolved_at=?
+                WHERE review_item_id=?
+                """,
+                (operator_instructor_id, now, review_item_id),
+            )
+            action_type = "REJECT"
+            after = {
+                "availability_status": "OUT_OF_CAMP_RANGE",
+                "is_deleted": 1,
+                "resolution_reason": "講習期間外として取込対象外",
+            }
+            message = f"{session_date} {period_number}限を期間外として取込対象から除外しました"
+        conn.execute(
+            """
+            INSERT INTO IMAGE_IMPORT_AUDIT_LOG
+                (batch_id,page_id,action_type,target_table,target_id,
+                 before_value_json,after_value_json,actor_type,
+                 operator_instructor_id,operator_name,school_id,school_name,created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                batch_id, page_id, action_type, "IMAGE_IMPORT_AVAILABILITY",
+                import_availability_id, json.dumps(before, ensure_ascii=False),
+                json.dumps(after, ensure_ascii=False), "INSTRUCTOR",
+                operator_instructor_id, operator_name, school_id, school_name, now,
+            ),
+        )
+        pending = conn.execute(
+            """
+            SELECT COUNT(*) FROM IMAGE_IMPORT_REVIEW_ITEMS r
+            JOIN IMAGE_IMPORT_PAGES p ON p.page_id=r.page_id
+            WHERE p.batch_id=? AND p.processing_status<>'SKIPPED'
+              AND r.resolution='PENDING' AND r.is_deleted=0 AND p.is_deleted=0
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        bad_quality = conn.execute(
+            """
+            SELECT COUNT(*) FROM IMAGE_IMPORT_PAGES
+            WHERE batch_id=? AND processing_status<>'SKIPPED'
+              AND layout_quality<>'OK' AND is_deleted=0
+            """,
+            (batch_id,),
+        ).fetchone()[0]
+        conn.execute(
+            "UPDATE IMAGE_IMPORT_BATCHES SET status=? WHERE batch_id=?",
+            ("REVIEW_PENDING" if pending or bad_quality else "REVIEWED", batch_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return message
