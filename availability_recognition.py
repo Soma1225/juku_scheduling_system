@@ -11,6 +11,8 @@ from pathlib import Path
 AVAILABLE_MAX_INK_RATIO = 0.02
 UNAVAILABLE_MIN_INK_RATIO = 0.06
 UNAVAILABLE_MIN_LINE_SCORE = 0.60
+PARTIAL_STROKE_MIN_INK_RATIO = 0.02
+PARTIAL_STROKE_MIN_SPAN_SCORE = 0.20
 
 
 @dataclass(frozen=True)
@@ -101,16 +103,36 @@ def analyze_availability_cell(cell) -> CellAnalysis:
         longest = max(math.hypot(x2 - x1, y2 - y1) for x1, y1, x2, y2 in lines[:, 0])
         line_score = min(1.0, longest / math.hypot(*cell.shape))
 
+    # 大きな斜線が複数セルをまたぐ場合、セル端にはHough変換の最短線長に
+    # 届かない短い線分だけが残る。連結成分の広がりも線の根拠として使う。
+    binary = cv2.threshold(cell, 180, 255, cv2.THRESH_BINARY_INV)[1]
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    span_score = max(
+        (
+            math.hypot(width, height) / math.hypot(cell.shape[1], cell.shape[0])
+            for contour in contours
+            for _, _, width, height in [cv2.boundingRect(contour)]
+            if cv2.contourArea(contour) >= 4
+        ),
+        default=0.0,
+    )
+    effective_line_score = max(line_score, min(1.0, span_score))
+
     if ink_ratio < AVAILABLE_MAX_INK_RATIO and line_score < 0.30:
         confidence = min(1.0, 1.0 - ink_ratio / AVAILABLE_MAX_INK_RATIO)
-        return CellAnalysis("AVAILABLE", ink_ratio, line_score, confidence)
-    if ink_ratio >= UNAVAILABLE_MIN_INK_RATIO or line_score >= UNAVAILABLE_MIN_LINE_SCORE:
+        return CellAnalysis("AVAILABLE", ink_ratio, effective_line_score, confidence)
+    partial_stroke = (
+        ink_ratio >= PARTIAL_STROKE_MIN_INK_RATIO
+        and span_score >= PARTIAL_STROKE_MIN_SPAN_SCORE
+    )
+    if ink_ratio >= UNAVAILABLE_MIN_INK_RATIO or line_score >= UNAVAILABLE_MIN_LINE_SCORE or partial_stroke:
         confidence = min(1.0, max(
             ink_ratio / UNAVAILABLE_MIN_INK_RATIO,
             line_score / UNAVAILABLE_MIN_LINE_SCORE,
+            span_score / PARTIAL_STROKE_MIN_SPAN_SCORE if partial_stroke else 0.0,
         ))
-        return CellAnalysis("UNAVAILABLE", ink_ratio, line_score, confidence)
-    return CellAnalysis("AMBIGUOUS", ink_ratio, line_score, 0.5)
+        return CellAnalysis("UNAVAILABLE", ink_ratio, effective_line_score, confidence)
+    return CellAnalysis("AMBIGUOUS", ink_ratio, effective_line_score, 0.5)
 
 
 def expected_months(paper_type: str, fiscal_year: int, grid_count: int) -> list[tuple[int, int]]:

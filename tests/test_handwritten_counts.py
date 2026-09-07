@@ -33,6 +33,17 @@ class HandwrittenCountTests(unittest.TestCase):
             cv2.imwrite(str(path), image)
             self.assertTrue(analyze_count_cell(path).is_blank)
 
+    def test_scattered_scan_dust_from_real_blank_cell_is_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "dust.png"
+            image = np.full((70, 180), 255, dtype=np.uint8)
+            for x, y in ((20, 15), (60, 35), (110, 20), (145, 48)):
+                image[y:y + 3, x:x + 4] = 0
+            cv2.imwrite(str(path), image)
+            result = recognize_count_cell(path)
+            self.assertTrue(result.is_blank)
+            self.assertEqual(result.recognized_count, 0)
+
     def test_handwritten_digit_is_not_blank(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "digit.png"

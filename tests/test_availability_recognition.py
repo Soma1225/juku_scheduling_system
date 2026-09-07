@@ -31,6 +31,13 @@ class AvailabilityCellTests(unittest.TestCase):
         cell[10:12, 10:12] = 0
         self.assertEqual(analyze_availability_cell(cell).state, "AVAILABLE")
 
+    def test_partial_diagonal_from_mark_spanning_cells_is_unavailable(self):
+        cell = np.full((44, 54), 255, dtype=np.uint8)
+        cv2.line(cell, (39, 43), (53, 32), 0, 3)
+        result = analyze_availability_cell(cell)
+        self.assertEqual(result.state, "UNAVAILABLE")
+        self.assertGreaterEqual(result.line_crossing_score, 0.20)
+
 
 class ExpectedMonthsTests(unittest.TestCase):
     def test_winter_crosses_calendar_year(self):

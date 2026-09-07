@@ -8,7 +8,9 @@ from pathlib import Path
 
 
 MIN_INK_COMPONENT_AREA = 8
-BLANK_MAX_INK_PIXELS = 40
+# 実物スキャンの未記入セルに残った微小点は最大52pxだった。数字は最小でも
+# 200px超だったため、余裕を持たせつつ数字を消さない値にする。
+BLANK_MAX_INK_PIXELS = 80
 MODEL_PATH = Path(__file__).with_name("models") / "mnist-12.onnx"
 MAX_COUNT_DIGITS = 2
 # 実物用紙で再評価するまで、誤登録を避けるため高めに設定する。
