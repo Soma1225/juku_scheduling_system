@@ -12,6 +12,7 @@ from handwritten_counts import store_subject_count_candidates
 from availability_recognition import store_availability_candidates
 from free_text_capture import capture_free_text
 from student_image_matching import recognize_student_candidates
+from subject_resolution import resolve_page_subjects
 from camp_form_tracking import record_scanned_return
 
 
@@ -184,16 +185,17 @@ def create_import_batch(
                         conn, page_id=page_cursor.lastrowid, student_id=selected_student_id,
                     )
                 recognition_requires_review |= selected_student_id is None
+                page_id = page_cursor.lastrowid
                 recognition_requires_review |= bool(
-                    store_subject_count_candidates(
-                        conn,
-                        page_id=page_cursor.lastrowid,
-                        count_regions=count_regions,
-                    )
+                    store_subject_count_candidates(conn, page_id=page_id, count_regions=count_regions)
                 )
+                subject_resolution = resolve_page_subjects(
+                    conn, page_id=page_id, manage_transaction=False,
+                )
+                recognition_requires_review |= bool(subject_resolution["review"])
                 _, availability_review_count = store_availability_candidates(
                     conn,
-                    page_id=page_cursor.lastrowid,
+                    page_id=page_id,
                     page_image_path=page_path,
                     paper_type=paper_type,
                     paper_fiscal_year=paper_fiscal_year,
@@ -202,7 +204,7 @@ def create_import_batch(
                 recognition_requires_review |= bool(availability_review_count)
                 capture_free_text(
                     conn,
-                    page_id=page_cursor.lastrowid,
+                    page_id=page_id,
                     page_image_path=page_path,
                     output_dir=page_path.parent / f"{page_path.stem}_free_text",
                 )

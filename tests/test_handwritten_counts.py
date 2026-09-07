@@ -6,7 +6,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from handwritten_counts import analyze_count_cell, confirm_subject_counts
+from handwritten_counts import (
+    analyze_count_cell,
+    confirm_subject_counts,
+    recognize_count_cell,
+    store_subject_count_candidates,
+)
 from image_import_migrations import ensure_image_import_schema
 
 
@@ -37,6 +42,26 @@ class HandwrittenCountTests(unittest.TestCase):
             result = analyze_count_cell(path)
             self.assertFalse(result.is_blank)
             self.assertGreater(result.ink_pixels, 40)
+
+    def test_clear_digit_is_recognized_locally(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digit.png"
+            image = np.full((70, 180), 255, dtype=np.uint8)
+            cv2.putText(image, "5", (70, 58), cv2.FONT_HERSHEY_SIMPLEX, 1.8, 0, 3)
+            cv2.imwrite(str(path), image)
+            result = recognize_count_cell(path)
+            self.assertEqual(result.recognized_count, 5)
+            self.assertIsNotNone(result.confidence)
+
+    def test_clear_two_digit_count_is_recognized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "two_digits.png"
+            image = np.full((70, 180), 255, dtype=np.uint8)
+            cv2.putText(image, "24", (55, 58), cv2.FONT_HERSHEY_SIMPLEX, 1.8, 0, 3)
+            cv2.imwrite(str(path), image)
+            result = recognize_count_cell(path)
+            self.assertEqual(result.recognized_count, 24)
+            self.assertIsNotNone(result.confidence_margin)
 
 
 class CountConfirmationTests(unittest.TestCase):
@@ -110,6 +135,24 @@ class CountConfirmationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             confirm_subject_counts(
                 self.conn, page_id=1, confirmed_counts={1: 100}, operator_instructor_id=1
+            )
+
+    def test_clear_count_is_stored_as_auto_recognized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "count.png"
+            image = np.full((70, 180), 255, dtype=np.uint8)
+            cv2.putText(image, "24", (55, 58), cv2.FONT_HERSHEY_SIMPLEX, 1.8, 0, 3)
+            cv2.imwrite(str(path), image)
+            reviews = store_subject_count_candidates(
+                self.conn, page_id=1, count_regions={"英語": path},
+            )
+            self.assertEqual(reviews, 0)
+            self.assertEqual(
+                self.conn.execute(
+                    "SELECT recognized_count,resolved_count,count_status "
+                    "FROM IMAGE_IMPORT_SUBJECT_ENROLLMENTS WHERE subject_row_label='英語'"
+                ).fetchone(),
+                (24, 24, "AUTO_RECOGNIZED"),
             )
 
 

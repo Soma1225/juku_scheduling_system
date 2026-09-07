@@ -115,6 +115,25 @@ class SubjectResolutionTests(unittest.TestCase):
             (1, "AUTO_MATCHED"),
         )
 
+    def test_resolution_can_join_an_existing_import_transaction(self):
+        page_id = self._make_page(
+            student_id=4, enrollment_year=2026, base_grade=7, paper_fy=2026,
+            rows=[("数学・算数", 2)],
+        )
+        self.conn.execute("BEGIN IMMEDIATE")
+        result = resolve_page_subjects(
+            self.conn, page_id=page_id, manage_transaction=False,
+        )
+        self.assertEqual(result["matched"], 1)
+        self.assertTrue(self.conn.in_transaction)
+        self.conn.rollback()
+        self.assertEqual(
+            self.conn.execute(
+                "SELECT subject_match_status FROM IMAGE_IMPORT_SUBJECT_ENROLLMENTS"
+            ).fetchone()[0],
+            "PENDING",
+        )
+
     def test_ambiguous_high_school_science_requires_staff_choice(self):
         page_id = self._make_page(
             student_id=3, enrollment_year=2026, base_grade=10, paper_fy=2026,

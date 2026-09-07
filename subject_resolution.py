@@ -72,8 +72,18 @@ def _subject_options(conn, grade: int, row_label: str, track: str | None) -> lis
     ]
 
 
-def resolve_page_subjects(conn, *, page_id: int) -> dict[str, int]:
-    """生徒と正の回数が確定した行だけ、科目を自動確定または確認待ちにする。"""
+def resolve_page_subjects(
+    conn,
+    *,
+    page_id: int,
+    manage_transaction: bool = True,
+) -> dict[str, int]:
+    """生徒と正の回数が確定した行だけ、科目を自動確定または確認待ちにする。
+
+    PDF取込中はバッチ全体のトランザクションへ参加させるため
+    ``manage_transaction=False`` を指定する。単独呼出しでは従来どおり、
+    この関数が開始・確定・取消を管理する。
+    """
     context = conn.execute(
         """
         SELECT p.batch_id,b.paper_fiscal_year,ps.candidate_student_id,
@@ -103,7 +113,8 @@ def resolve_page_subjects(conn, *, page_id: int) -> dict[str, int]:
     now = _now_iso()
     counts = {"matched": 0, "review": 0, "skipped": 0}
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        if manage_transaction:
+            conn.execute("BEGIN IMMEDIATE")
         for enrollment_id, row_label, resolved_count in rows:
             if resolved_count is None or resolved_count <= 0:
                 counts["skipped"] += 1
@@ -141,9 +152,11 @@ def resolve_page_subjects(conn, *, page_id: int) -> dict[str, int]:
                 "UPDATE IMAGE_IMPORT_BATCHES SET status='REVIEW_PENDING' WHERE batch_id=? AND status<>'IMPORTED'",
                 (batch_id,),
             )
-        conn.commit()
+        if manage_transaction:
+            conn.commit()
     except Exception:
-        conn.rollback()
+        if manage_transaction:
+            conn.rollback()
         raise
     return counts
 
