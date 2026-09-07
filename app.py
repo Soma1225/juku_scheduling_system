@@ -15,11 +15,14 @@ page_*.py の各モジュールに分かれている。
 必要なファイル(全て同じフォルダに置くこと):
     app.py, db.py, layout.py, schema.sql,
     page_home.py, page_students.py, page_instructors.py, page_subjects.py,
-    page_terms.py, page_periods.py, page_availability.py, page_instructor_subjects.py
+    page_availability.py, page_instructor_subjects.py, page_camps.py,
+    page_camp_enrollments.py, page_camp_availability.py, page_regular_enrollments.py,
+    page_student_detail.py
 """
 
 import threading
 import webbrowser
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -29,25 +32,29 @@ import page_home
 import page_students
 import page_instructors
 import page_subjects
-import page_terms
 import page_availability
 import page_instructor_subjects
 import page_camps
 import page_camp_enrollments
 import page_camp_availability
 import page_regular_enrollments
+import page_follow_enrollments
 import page_student_detail
+import page_camp_sync_groups
+import page_schedule_view
+import page_run_scheduler
+import page_instructor_academic_year
+import page_excel_import
 
 PORT = 8000
 
 # パス -> (render関数, handle_post関数) の対応表。
 # 生徒/講師の対応可能時間だけ、同じモジュール内の別関数(_student/_instructor)を使う。
 ROUTES = {
-    "/": (page_home.render, None),
+    "/": (page_home.render, page_home.handle_post),
     "/students": (page_students.render, page_students.handle_post),
     "/instructors": (page_instructors.render, page_instructors.handle_post),
     "/subjects": (page_subjects.render, page_subjects.handle_post),
-    "/terms": (page_terms.render, page_terms.handle_post),
     "/student-availability": (page_availability.render_student, page_availability.handle_post_student),
     "/instructor-availability": (page_availability.render_instructor, page_availability.handle_post_instructor),
     "/instructor-subjects": (page_instructor_subjects.render, page_instructor_subjects.handle_post),
@@ -56,8 +63,65 @@ ROUTES = {
     "/camp-availability-student": (page_camp_availability.render_student, page_camp_availability.handle_post_student),
     "/camp-availability-instructor": (page_camp_availability.render_instructor, page_camp_availability.handle_post_instructor),
     "/regular-enrollments": (page_regular_enrollments.render, page_regular_enrollments.handle_post),
+    "/follow-enrollments": (page_follow_enrollments.render, page_follow_enrollments.handle_post),
     "/student-detail": (page_student_detail.render, None),
+    "/camp-sync-groups": (page_camp_sync_groups.render, page_camp_sync_groups.handle_post),
+    "/schedule-by-day": (page_schedule_view.render_by_day, None),
+    "/schedule-instructor": (page_schedule_view.render_instructor_view, None),
+    "/schedule-student": (page_schedule_view.render_student_view, None),
+    "/run-scheduler": (page_run_scheduler.render, page_run_scheduler.handle_post),
+    "/instructor-academic-year": (page_instructor_academic_year.render, page_instructor_academic_year.handle_post),
+    "/excel-import": (page_excel_import.render, page_excel_import.handle_post),
 }
+
+
+def parse_multipart(body: bytes, content_type: str) -> dict:
+    """
+    multipart/form-data のリクエストボディを解析する。
+    戻り値は既存の parse_qs() 互換の {name: [value, ...]} 形式に、
+    アップロードされたファイルだけ特別なキー "_files" (dict) として追加したもの。
+    "_files" の中身: {field_name: {"filename": ..., "content": bytes}}
+    """
+    boundary = None
+    for part in content_type.split(";"):
+        part = part.strip()
+        if part.startswith("boundary="):
+            boundary = part[len("boundary="):].strip('"')
+            break
+    if boundary is None:
+        return {}
+
+    boundary_bytes = ("--" + boundary).encode("utf-8")
+    segments = body.split(boundary_bytes)
+
+    fields: dict = {}
+    files: dict = {}
+
+    for segment in segments:
+        segment = segment.strip(b"\r\n")
+        if not segment or segment == b"--":
+            continue
+        if b"\r\n\r\n" not in segment:
+            continue
+        header_bytes, content = segment.split(b"\r\n\r\n", 1)
+        content = content.rstrip(b"\r\n")
+        headers = header_bytes.decode("utf-8", errors="replace")
+
+        name_match = re.search(r'name="([^"]*)"', headers)
+        if not name_match:
+            continue
+        field_name = name_match.group(1)
+
+        filename_match = re.search(r'filename="([^"]*)"', headers)
+        if filename_match:
+            filename = filename_match.group(1)
+            if filename:  # ファイルが選択されていない場合はfilenameが空文字列になる
+                files[field_name] = {"filename": filename, "content": content}
+        else:
+            fields.setdefault(field_name, []).append(content.decode("utf-8", errors="replace"))
+
+    fields["_files"] = files
+    return fields
 
 
 class PortalHandler(BaseHTTPRequestHandler):
@@ -86,16 +150,21 @@ class PortalHandler(BaseHTTPRequestHandler):
 
         render_fn, post_fn = ROUTES[path]
         length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8")
-        fields = parse_qs(body)
+        raw_body = self.rfile.read(length)
+        content_type = self.headers.get("Content-Type", "")
+
+        if content_type.startswith("multipart/form-data"):
+            fields = parse_multipart(raw_body, content_type)
+        else:
+            fields = parse_qs(raw_body.decode("utf-8"))
 
         conn = get_conn()
         try:
             message_html, qs = post_fn(fields, conn)
         except Exception as e:
             message_html = f'<div class="msg error">処理に失敗しました: {e}</div>'
-            # エラー時は、送信されたfieldsをそのままqsとして使い、入力状態を維持する
-            qs = {k: v for k, v in fields.items()}
+            # エラー時は、送信されたfieldsをそのままqsとして使い、入力状態を維持する(ファイル情報は除く)
+            qs = {k: v for k, v in fields.items() if k != "_files"}
         finally:
             conn.close()
 

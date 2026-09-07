@@ -82,7 +82,7 @@ def insert_camp(conn, fiscal_year: int, camp_type: str, planned_start_date: str,
 
 
 def list_camps(conn) -> list[tuple[int, str]]:
-    """他のページ(受講契約・可用時間)からも参照される、共有の一覧取得関数。"""
+    """他のページ(受講科目回数登録・可用時間)からも参照される、共有の一覧取得関数。"""
     return conn.execute("SELECT camp_id, camp_name FROM CAMPS ORDER BY planned_start_date DESC").fetchall()
 
 

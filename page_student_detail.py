@@ -6,7 +6,7 @@ page_student_detail.py
 一覧で確認できるページ。入力用ではなく、確認専用の画面。
 """
 
-from db import get_conn
+from db import get_conn, format_grade_label
 from page_regular_enrollments import list_active_enrollments_for_student
 
 
@@ -65,9 +65,9 @@ def render(qs: dict, message_html: str = "") -> str:
             <table><tr><th>科目</th><th>コマ数</th><th>形式</th><th>指定講師</th></tr>{item_rows}</table>
             """
         if not camp_sections:
-            camp_sections = '<div class="hint">講習会の受講契約はありません</div>'
+            camp_sections = '<div class="hint">講習会の受講科目登録はありません</div>'
 
-        status_line = f"{info[2]}年生 / {info[3]}" if info else ""
+        status_line = f"{format_grade_label(info[2])} / {info[3]}" if info else ""
 
         body_html = f"""
         <div style="margin-top:8px;color:#666;font-size:13px;">{status_line}</div>

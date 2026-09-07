@@ -7,8 +7,7 @@ page_availability.py
 テーブル名だけが違う、ほぼ同一のロジックなので、内部で共通化している。
 """
 
-from db import get_conn
-from page_terms import list_terms
+from db import get_conn, list_terms
 from page_instructors import list_instructors
 
 DAYS = ["月", "火", "水", "木", "金", "土", "日"]
