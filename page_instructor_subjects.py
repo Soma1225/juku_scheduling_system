@@ -18,8 +18,8 @@ def get_subject_ids_by_group(conn, subject_group, grade_band=None, course_catego
 
 
 def bulk_assign_subjects(conn, instructor_id, subject_group, proficiency_level, grade_band=None, course_category=None) -> int:
-    if not (1 <= proficiency_level <= 5):
-        raise ValueError("proficiency_level は 1〜5 で指定してください")
+    if not (1 <= proficiency_level <= 2):
+        raise ValueError("proficiency_level は 1〜2 で指定してください")
     subject_ids = get_subject_ids_by_group(conn, subject_group, grade_band, course_category)
     if not subject_ids:
         raise ValueError(f"subject_group='{subject_group}' に該当する科目が見つかりません")
@@ -42,8 +42,8 @@ def unassign_subject(conn, instructor_id, subject_id) -> bool:
 
 
 def update_subject_proficiency(conn, instructor_id, subject_id, new_level) -> bool:
-    if not (1 <= new_level <= 5):
-        raise ValueError("proficiency_level は 1〜5 で指定してください")
+    if not (1 <= new_level <= 2):
+        raise ValueError("proficiency_level は 1〜2 で指定してください")
     cur = conn.execute(
         "UPDATE INSTRUCTOR_SUBJECTS SET proficiency_level = ? WHERE instructor_id = ? AND subject_id = ?",
         (new_level, instructor_id, subject_id),
@@ -82,7 +82,7 @@ def render(qs: dict, message_html: str = "") -> str:
             for row in current:
                 prof_options = "".join(
                     f'<option value="{lv}"{" selected" if lv == row["proficiency_level"] else ""}>{lv}</option>'
-                    for lv in range(1, 6)
+                    for lv in range(1, 3)
                 )
                 rows += f"""
                 <tr>
@@ -117,10 +117,9 @@ def render(qs: dict, message_html: str = "") -> str:
           <input type="hidden" name="instructor_id" value="{instructor_id}">
           <label>上位グループ</label>
           <select name="group_key">{group_options}</select>
-          <label>習熟度(1〜5、自己申告)</label>
+          <label>習熟度(1〜2、自己申告)</label>
           <select name="proficiency_level">
-            <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option>
-            <option value="4">4</option><option value="5">5</option>
+            <option value="1">1</option><option value="2" selected>2</option>
           </select>
           <button type="submit" style="background:#534AB7;">このグループを一括登録する</button>
         </form>

@@ -166,11 +166,24 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
     student_id = get("student_id")
 
     if action == "add":
+        subject_id = int(get("subject_id"))
+        instructor_id = int(get("instructor_id"))
         new_id = insert_regular_enrollment(
-            conn, int(student_id), int(get("subject_id")), int(get("instructor_id")),
+            conn, int(student_id), subject_id, instructor_id,
             get("day_of_week"), int(get("period_number")), get("effective_start_date"),
         )
-        message_html = f'<div class="msg success">登録しました → enrollment_id={new_id}</div>'
+        warning_html = ""
+        from db import check_instructor_teaches_subject
+        if not check_instructor_teaches_subject(conn, instructor_id, subject_id):
+            instructor_name = conn.execute(
+                "SELECT last_name || first_name FROM INSTRUCTORS WHERE instructor_id = ?", (instructor_id,)
+            ).fetchone()
+            warning_html = (
+                f'<div class="msg error">⚠️ 警告: {instructor_name[0] if instructor_name else "選択した講師"} は、'
+                f'この科目を担当科目として登録していません。選択に誤りがないか確認してください'
+                f'（登録自体はそのまま完了しています）</div>'
+            )
+        message_html = f'<div class="msg success">登録しました → enrollment_id={new_id}</div>{warning_html}'
     elif action == "end":
         end_regular_enrollment(conn, int(get("enrollment_id")))
         message_html = '<div class="msg success">契約を終了しました</div>'

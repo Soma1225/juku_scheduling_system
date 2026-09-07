@@ -7,24 +7,47 @@ layout.py
 最終的な組み立ては全てこのモジュールに任せる。
 """
 
-MENU = [
-    ("/", "ホーム"),
-    ("/students", "生徒登録"),
-    ("/instructors", "講師登録"),
-    ("/subjects", "科目マスタ"),
-    ("/terms", "学期マスタ"),
-    ("/student-availability", "生徒 対応可能時間"),
-    ("/instructor-availability", "講師 対応可能時間"),
-    ("/instructor-subjects", "講師 担当科目"),
-    ("/regular-enrollments", "通常授業 契約登録"),
-    ("/student-detail", "生徒詳細"),
-    ("/camps", "講習会マスタ"),
-    ("/camp-enrollments", "講習会 受講契約"),
-    ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
-    ("/camp-availability-instructor", "講師 講習会中の対応可能時間"),
+MENU_GROUPS = [
+    ("基本設定", [
+        ("/subjects", "科目マスタ"),
+        ("/excel-import", "通常授業 Excel取り込み"),
+    ]),
+    ("生徒情報", [
+        ("/students", "生徒登録"),
+        ("/student-detail", "生徒詳細"),
+        ("/regular-enrollments", "通常授業 契約登録"),
+        ("/follow-enrollments", "教科フォロー登録"),
+        ("/student-availability", "生徒 対応可能時間"),
+    ]),
+    ("講師情報", [
+        ("/instructors", "講師登録"),
+        ("/instructor-subjects", "講師 担当科目"),
+        ("/instructor-availability", "講師 対応可能時間"),
+        ("/instructor-academic-year", "講師 学年更新の確認"),
+    ]),
+    ("講習会時間割作成", [
+        ("/camps", "講習会マスタ"),
+        ("/image-import", "記入用紙 PDF取り込み"),
+        ("/camp-form-tracking", "用紙 配布・回収確認"),
+        ("/camp-enrollments", "講習会 受講科目回数登録"),
+        ("/camp-sync-groups", "兄弟等 同時受講グループ"),
+        ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
+        ("/camp-availability-instructor", "講師 講習会中の対応可能時間"),
+        ("/run-scheduler", "スケジューリングの実行"),
+    ]),
+    ("組まれた時間割の確認", [
+        ("/schedule-by-day", "日付単位の授業スケジュール"),
+        ("/schedule-instructor", "講師視点の時間割"),
+        ("/schedule-student", "生徒視点の時間割"),
+    ]),
 ]
 
+# 既存コードとの互換用: グループを平坦化した (path, label) の一覧
+MENU = [("/", "ホーム")] + [item for _, items in MENU_GROUPS for item in items]
+
 ROUTE_TITLES = {path: label for path, label in MENU}
+ROUTE_TITLES["/image-import-review"] = "取込結果確認"
+ROUTE_TITLES["/camp-form-tracking"] = "用紙 配布・回収確認"
 
 _LAYOUT = """<!DOCTYPE html>
 <html lang="ja">
@@ -33,17 +56,26 @@ _LAYOUT = """<!DOCTYPE html>
 <title>{title} - 塾スケジューリングシステム</title>
 <style>
   * {{ box-sizing:border-box; }}
-  body {{ font-family:"Yu Gothic","Hiragino Sans",sans-serif; background:#f4f4f2; margin:0; }}
+  html {{ overscroll-behavior: none; }}
+  body {{ font-family:"Yu Gothic","Hiragino Sans",sans-serif; background:#f4f4f2; margin:0;
+          overscroll-behavior: none; }}
   .layout {{ display:flex; min-height:100vh; }}
-  nav {{ width:200px; background:#1F4E5F; color:#fff; padding:24px 0; flex-shrink:0; }}
+  nav {{ width:200px; background:#1F4E5F; color:#fff; padding:24px 0; flex-shrink:0; overflow-y:auto;
+         position:fixed; top:0; left:0; height:100vh; }}
   nav .brand {{ font-size:14px; font-weight:bold; padding:0 20px 20px; opacity:0.85; }}
-  nav a {{ display:block; padding:10px 20px; color:#d8e6ea; text-decoration:none; font-size:13px; }}
+  nav .home-link {{ display:block; padding:10px 20px; color:#d8e6ea; text-decoration:none; font-size:13px;
+                     border-bottom:1px solid rgba(255,255,255,0.1); margin-bottom:8px; }}
+  nav .home-link:hover {{ background:#163a47; }}
+  nav .home-link.active {{ background:#0F6E56; color:#fff; font-weight:bold; }}
+  nav .group-title {{ padding:14px 20px 6px; font-size:11px; letter-spacing:0.05em; color:#8fb0b8;
+                       text-transform:uppercase; }}
+  nav a {{ display:block; padding:8px 20px 8px 28px; color:#d8e6ea; text-decoration:none; font-size:13px; }}
   nav a:hover {{ background:#163a47; }}
   nav a.active {{ background:#0F6E56; color:#fff; font-weight:bold; }}
-  main {{ flex:1; padding:40px; }}
-  .card {{ max-width:600px; background:#fff; border-radius:10px; padding:32px 36px;
+  main {{ flex:1; padding:40px; margin-left:200px; overscroll-behavior: none; }}
+  .card {{ max-width:820px; background:#fff; border-radius:10px; padding:32px 36px;
            box-shadow:0 2px 10px rgba(0,0,0,0.08); }}
-  .card.wide {{ max-width:760px; }}
+  .card.wide {{ max-width:none; width:100%; }}
   h1 {{ font-size:20px; margin-bottom:8px; color:#1F4E5F; }}
   .hint {{ font-size:12px; color:#888; margin-bottom:20px; }}
   label {{ display:block; font-size:13px; color:#333; margin-top:14px; margin-bottom:4px; }}
@@ -68,7 +100,9 @@ _LAYOUT = """<!DOCTYPE html>
   .row-form button {{ margin:0; padding:5px 10px; font-size:12px; width:auto; }}
   .btn-update {{ background:#0F6E56; }}
   .btn-remove {{ background:#993C1D; }}
-  .menu-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:20px; }}
+  .menu-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:12px; margin-bottom:8px; }}
+  .home-section-title {{ font-size:13px; color:#534AB7; margin-top:28px; margin-bottom:0; }}
+  .home-section-title:first-of-type {{ margin-top:20px; }}
   .menu-card {{ display:flex; align-items:center; gap:14px; padding:16px 18px; border:1px solid #eee;
                 border-radius:10px; text-decoration:none; color:inherit; transition:0.15s; }}
   .menu-card:hover {{ border-color:#1F4E5F; background:#f8fafb; }}
@@ -77,6 +111,54 @@ _LAYOUT = """<!DOCTYPE html>
   .menu-card-title {{ font-size:14px; font-weight:bold; color:#1F4E5F; }}
   .menu-card-desc {{ font-size:12px; color:#888; margin-top:2px; }}
   .menu-card-arrow {{ font-size:20px; color:#ccc; }}
+
+  /* --- ホームダッシュボード(時間割・教科フォロー・通知欄) --- */
+  .date-nav {{ display:flex; align-items:center; gap:16px; margin-bottom:12px; }}
+  .date-nav button {{ background:#eef2f0; border:none; width:32px; height:32px; border-radius:6px;
+                       font-size:14px; color:#1F4E5F; cursor:pointer; margin-top:0; padding:0; }}
+  .date-label {{ font-size:14px; font-weight:bold; color:#1F4E5F; }}
+
+  .table-scroll {{ overflow-x:auto; }}
+  table.timetable {{ border-collapse:collapse; font-size:12px; width:100%; }}
+  table.timetable th, table.timetable td {{ border:1px solid #e5e3dd; padding:5px 4px; text-align:center;
+                                              vertical-align:middle; height:30px; }}
+  table.timetable thead th.period-head {{ background:#1F4E5F; color:#fff; font-size:11.5px; padding:6px; white-space:nowrap; }}
+  table.timetable thead th.sub-head {{ background:#eef2f0; color:#666; font-weight:normal; font-size:10px; }}
+  table.timetable td.empty {{ color:#ddd; }}
+  table.timetable td.col-instructor {{ width:42px; }}
+  table.timetable td.col-grade {{ width:26px; color:#999; font-size:10px; }}
+  table.timetable td.col-student {{ width:110px; }}
+  table.timetable td.col-subject {{ width:64px; }}
+  table.timetable td.col-attendance {{ width:30px; }}
+
+  .subject-badge {{ display:inline-block; padding:1px 6px; border-radius:3px; font-size:11px; }}
+
+  .attendance-indicator {{ display:inline; font-size:14px; font-weight:bold; color:#ccc; cursor:pointer;
+                            background:none; border:none; padding:0; margin:0; width:auto; }}
+  .attendance-indicator.att-present {{ color:#3D7A2E; }}
+  .attendance-indicator.att-absent {{ color:#B0352F; }}
+
+  .cell-legend {{ font-size:11px; color:#999; margin-top:10px; }}
+
+  .follow-blocks {{ display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }}
+  table.follow-table {{ border-collapse:collapse; font-size:12.5px; }}
+  table.follow-table th, table.follow-table td {{ border:1px solid #e5e3dd; padding:6px; text-align:center; height:30px; }}
+  table.follow-table thead th {{ color:#1F4E5F; font-weight:bold; font-size:11.5px; white-space:nowrap; }}
+  table.follow-table td.f-instructor {{ width:42px; color:#333; font-weight:bold; }}
+  table.follow-table td.f-grade {{ width:26px; color:#999; font-size:10px; }}
+  table.follow-table td.f-student {{ width:96px; text-align:left; }}
+  table.follow-table td.empty {{ color:#ddd; }}
+
+  .notice-tabs {{ display:flex; gap:2px; }}
+  .notice-tab {{ background:#eef2f0; border:none; padding:9px 20px; font-size:13px; color:#1F4E5F;
+                 cursor:pointer; border-radius:6px 6px 0 0; margin-top:0; width:auto; }}
+  .notice-tab.notice-tab-active {{ background:#1F4E5F; color:#fff; font-weight:bold; }}
+  .notice-body {{ background:#fff; border:1px solid #e5e3dd; border-radius:0 6px 6px 6px; padding:14px 16px; min-height:60px; }}
+  .notice-list {{ list-style:none; margin:0; padding:0; font-size:13px; max-height:180px; overflow-y:auto; }}
+  .notice-list li {{ padding:7px 0; border-bottom:1px solid #f0f0ee; display:flex; align-items:center; gap:8px; }}
+  .notice-list a {{ color:#1F4E5F; text-decoration:none; }}
+  .priority-badge {{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+                      border-radius:50%; background:#D3382F; color:#fff; font-size:10px; font-weight:bold; flex-shrink:0; }}
 </style>
 </head>
 <body>
@@ -96,12 +178,29 @@ _LAYOUT = """<!DOCTYPE html>
 """
 
 
+# 表やグリッド(横に長くなりやすい要素)を含むページは、横幅を広めに使う
+WIDE_PATHS = {
+    "/", "/subjects", "/instructor-subjects", "/camp-enrollments",
+    "/student-availability", "/instructor-availability",
+    "/camp-availability-student", "/camp-availability-instructor",
+    "/regular-enrollments", "/follow-enrollments", "/student-detail", "/camp-sync-groups",
+    "/schedule-by-day", "/schedule-instructor", "/schedule-student", "/excel-import",
+    "/image-import",
+    "/image-import-review",
+    "/camp-form-tracking",
+}
+
+
 def render_page(path: str, content: str) -> bytes:
     """指定パスのタイトル・アクティブ状態を踏まえて、ページ全体のHTML(bytes)を組み立てる。"""
-    nav_links = "".join(
-        f'<a href="{p}" class="{"active" if p == path else ""}">{label}</a>' for p, label in MENU
-    )
-    card_class = "wide" if path == "/" else ""
+    home_class = "active" if path == "/" else ""
+    nav_links = f'<a href="/" class="home-link {home_class}">ホーム</a>'
+    for group_name, items in MENU_GROUPS:
+        nav_links += f'<div class="group-title">{group_name}</div>'
+        nav_links += "".join(
+            f'<a href="{p}" class="{"active" if p == path else ""}">{label}</a>' for p, label in items
+        )
+    card_class = "wide" if path in WIDE_PATHS else ""
     title = ROUTE_TITLES.get(path, path)
     html = _LAYOUT.format(title=title, nav_links=nav_links, content=content, card_class=card_class)
     return html.encode("utf-8")
