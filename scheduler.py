@@ -13,6 +13,7 @@ CP-SATで実際に時間割を解く前の「下準備」部分。
 """
 
 import sqlite3
+import time
 from db import get_conn
 from page_camp_enrollments import get_max_sessions_per_day
 
@@ -271,9 +272,82 @@ def _spacing_penalty(gap_days: int) -> int:
     return (weekday_gap ** 2) * WEEKDAY_GAP_WEIGHT + gap_days * INTERVAL_GAP_WEIGHT
 
 
-def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: float = 7200.0) -> dict:
+def is_regular_continuation_subject(
+    conn: sqlite3.Connection, student_id: int, subject_id: int, as_of_date: str
+) -> bool:
+    """指定日時点で有効な、同じ生徒・科目の通常授業契約があるかを返す。
+
+    ``effective_end_date`` は、通常授業の表示処理と同じく終了日当日を
+    含まない境界として扱う。
     """
-    講習会全体を解く。
+    row = conn.execute(
+        """SELECT 1
+           FROM REGULAR_COURSE_ENROLLMENTS
+           WHERE student_id = ? AND subject_id = ?
+             AND effective_start_date <= ?
+             AND (effective_end_date IS NULL OR effective_end_date > ?)
+           LIMIT 1""",
+        (student_id, subject_id, as_of_date, as_of_date),
+    ).fetchone()
+    return row is not None
+
+
+def _get_current_camp_assignments(
+    conn: sqlite3.Connection, camp_id: int
+) -> dict[int, list[tuple[int, int]]]:
+    """DB上の現行割当を enrollment_id ごとに返す。
+
+    ASSIGNMENTS は enrollment_id を持たないため、生徒・科目で講習会契約へ
+    対応付ける。同じ講習会に同じ生徒・科目の契約が複数ある場合は安全に
+    対応付けられないので、黙って誤固定せずエラーにする。
+    """
+    duplicate = conn.execute(
+        """SELECT student_id, subject_id, COUNT(*)
+           FROM CAMP_COURSE_ENROLLMENTS
+           WHERE camp_id = ?
+           GROUP BY student_id, subject_id
+           HAVING COUNT(*) > 1
+           LIMIT 1""",
+        (camp_id,),
+    ).fetchone()
+    if duplicate:
+        raise ValueError(
+            "部分再計算を実行できません。同じ講習会に同一生徒・同一科目の契約が"
+            f"複数あります(student_id={duplicate[0]}, subject_id={duplicate[1]})。"
+        )
+
+    current: dict[int, list[tuple[int, int]]] = {
+        row[0]: []
+        for row in conn.execute(
+            "SELECT enrollment_id FROM CAMP_COURSE_ENROLLMENTS WHERE camp_id = ?", (camp_id,)
+        ).fetchall()
+    }
+    rows = conn.execute(
+        """SELECT e.enrollment_id, s.instructor_id, s.slot_id
+           FROM SESSIONS s
+           JOIN ASSIGNMENTS a ON a.session_id = s.session_id
+           JOIN CAMP_COURSE_ENROLLMENTS e
+             ON e.camp_id = s.camp_id
+            AND e.student_id = a.student_id
+            AND e.subject_id = a.subject_id
+           WHERE s.camp_id = ?
+           ORDER BY e.enrollment_id, s.slot_id, s.instructor_id""",
+        (camp_id,),
+    ).fetchall()
+    for enrollment_id, instructor_id, slot_id in rows:
+        current[enrollment_id].append((instructor_id, slot_id))
+    return current
+
+
+def _solve_camp_core_once(
+    conn: sqlite3.Connection,
+    camp_id: int,
+    time_limit_seconds: float,
+    fixed_assignments: dict[int, list[tuple[int, int]]] | None = None,
+    required_counts: dict[int, int] | None = None,
+) -> dict:
+    """
+    講習会を1回解く。部分再計算の段階制御は solve_camp_core が行う。
     - コア制約: 重複防止・コマ数の埋まり方・優先順位(Step3a)
     - 授業間隔・曜日ズレの評価(Step3b): 同じ契約内の2つの授業日が近すぎたり、
       理想の間隔(曜日が揃う間隔)からズレていたりすると、目的関数上でペナルティを受ける
@@ -285,6 +359,9 @@ def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: 
     }
     """
     from ortools.sat.python import cp_model
+
+    fixed_assignments = fixed_assignments or {}
+    required_counts = required_counts or {}
 
     enrollments = conn.execute(
         "SELECT enrollment_id, student_id, contracted_count, format FROM CAMP_COURSE_ENROLLMENTS WHERE camp_id = ?",
@@ -307,6 +384,12 @@ def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: 
             "student_id": student_id, "contracted_count": contracted_count, "format": format_,
         }
         candidates = build_slot_candidates_for_enrollment(conn, enrollment_id)
+        # 固定済みの割当は、現在の対応可能時間や講師の在籍状態が変わっていても
+        # 「絶対に動かさない」ため、候補に無ければモデルへ明示的に戻す。
+        for fixed_instructor_id, fixed_slot_id in fixed_assignments.get(enrollment_id, []):
+            candidates.setdefault(fixed_instructor_id, [])
+            if fixed_slot_id not in candidates[fixed_instructor_id]:
+                candidates[fixed_instructor_id].append(fixed_slot_id)
         x[enrollment_id] = {}
         enrollment_rank_of[enrollment_id] = {
             instructor_id: rank for rank, instructor_id in enumerate(candidates.keys())
@@ -328,7 +411,7 @@ def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: 
                 student_slot_vars.setdefault(student_id, {}).setdefault(slot_id, []).append(var)
                 student_date_vars.setdefault(student_id, {}).setdefault(session_date, []).append(var)
 
-    if not any(x[eid] for eid in x):
+    if not any(x[eid] for eid in x) and not required_counts:
         return {"assignments": {}, "unfulfilled": {eid: info["contracted_count"] for eid, info in enrollment_info.items()}, "status": "NO_CANDIDATES"}
 
     # --- 制約1: 契約コマ数を超えない ---
@@ -336,6 +419,13 @@ def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: 
         vars_for_enrollment = list(x[enrollment_id].values())
         total = sum(vars_for_enrollment) if vars_for_enrollment else 0
         model.Add(total <= info["contracted_count"])
+        if enrollment_id in required_counts:
+            model.Add(total == required_counts[enrollment_id])
+
+    # --- 部分再計算: 現在の(講師, 枠)を等式制約で固定する ---
+    for enrollment_id, assigned_pairs in fixed_assignments.items():
+        for pair in assigned_pairs:
+            model.Add(x[enrollment_id][pair] == 1)
 
     # --- 制約2: 生徒は同じ枠に二重で入らない ---
     for student_id, slot_map in student_slot_vars.items():
@@ -513,6 +603,126 @@ def solve_camp_core(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: 
     return {"assignments": assignments, "unfulfilled": unfulfilled, "status": status_name}
 
 
+def solve_camp_core(
+    conn: sqlite3.Connection,
+    camp_id: int,
+    time_limit_seconds: float = 7200.0,
+    target_student_ids: set[int] | None = None,
+) -> dict:
+    """講習会全体、または指定生徒に限定した部分再計算を行う。
+
+    ``target_student_ids`` が ``None`` の場合は従来どおり全契約を自由に解く。
+    指定された場合は、まず対象外の全割当を固定して解き、解が無い場合だけ
+    対象外生徒の講習会限定科目を解放する。通常授業の継続科目は最後まで固定する。
+    """
+    if target_student_ids is None:
+        return _solve_camp_core_once(conn, camp_id, time_limit_seconds)
+
+    target_student_ids = {int(student_id) for student_id in target_student_ids}
+    if not target_student_ids:
+        raise ValueError("部分再計算の対象生徒を1人以上選択してください")
+
+    enrollment_rows = conn.execute(
+        """SELECT enrollment_id, student_id, subject_id, contracted_count
+           FROM CAMP_COURSE_ENROLLMENTS WHERE camp_id = ?""",
+        (camp_id,),
+    ).fetchall()
+    camp_student_ids = {row[1] for row in enrollment_rows}
+    unknown_ids = target_student_ids - camp_student_ids
+    if unknown_ids:
+        raise ValueError(
+            "選択された生徒はこの講習会の契約を持っていません: "
+            + ", ".join(map(str, sorted(unknown_ids)))
+        )
+
+    camp_row = conn.execute(
+        "SELECT planned_start_date FROM CAMPS WHERE camp_id = ?", (camp_id,)
+    ).fetchone()
+    if camp_row is None:
+        raise ValueError(f"camp_id={camp_id} が見つかりません")
+    as_of_date = camp_row[0]
+
+    current = _get_current_camp_assignments(conn, camp_id)
+    if not any(current.values()):
+        raise ValueError(
+            "部分再計算の元になる既存時間割がありません。先に全体スケジューリングを実行してください"
+        )
+    target_enrollment_ids: set[int] = set()
+    fixed_regular_ids: set[int] = set()
+    limited_subject_ids: set[int] = set()
+    contracted_counts: dict[int, int] = {}
+
+    for enrollment_id, student_id, subject_id, contracted_count in enrollment_rows:
+        contracted_counts[enrollment_id] = contracted_count
+        if student_id in target_student_ids:
+            target_enrollment_ids.add(enrollment_id)
+        elif is_regular_continuation_subject(conn, student_id, subject_id, as_of_date):
+            fixed_regular_ids.add(enrollment_id)
+        else:
+            limited_subject_ids.add(enrollment_id)
+
+    def fixed_for(enrollment_ids: set[int]) -> dict[int, list[tuple[int, int]]]:
+        return {enrollment_id: list(current.get(enrollment_id, [])) for enrollment_id in enrollment_ids}
+
+    def required_for_fixed(enrollment_ids: set[int]) -> dict[int, int]:
+        return {enrollment_id: len(current.get(enrollment_id, [])) for enrollment_id in enrollment_ids}
+
+    all_non_target_ids = fixed_regular_ids | limited_subject_ids
+    stage1_fixed = fixed_for(all_non_target_ids)
+    stage1_required = required_for_fixed(all_non_target_ids)
+    stage1_required.update({eid: contracted_counts[eid] for eid in target_enrollment_ids})
+
+    started_at = time.monotonic()
+    first_stage_limit = max(0.1, time_limit_seconds / 2)
+    result = _solve_camp_core_once(
+        conn,
+        camp_id,
+        first_stage_limit,
+        fixed_assignments=stage1_fixed,
+        required_counts=stage1_required,
+    )
+    feasible_statuses = {"OPTIMAL", "FEASIBLE"}
+    relaxation_used = False
+
+    if result["status"] not in feasible_statuses:
+        relaxation_used = True
+        elapsed = time.monotonic() - started_at
+        second_stage_limit = max(0.1, time_limit_seconds - elapsed)
+        stage2_required = required_for_fixed(fixed_regular_ids)
+        stage2_required.update({eid: contracted_counts[eid] for eid in target_enrollment_ids})
+        # 講習会限定科目は枠・講師を動かせるが、現行の割当コマ数は減らさない。
+        stage2_required.update(required_for_fixed(limited_subject_ids))
+        result = _solve_camp_core_once(
+            conn,
+            camp_id,
+            second_stage_limit,
+            fixed_assignments=fixed_for(fixed_regular_ids),
+            required_counts=stage2_required,
+        )
+
+    changed_ids = {
+        enrollment_id
+        for enrollment_id in contracted_counts
+        if set(current.get(enrollment_id, []))
+        != set(result.get("assignments", {}).get(enrollment_id, []))
+    } if result["status"] in feasible_statuses else set()
+
+    result.update(
+        {
+            "partial_recalculation": True,
+            "target_student_ids": sorted(target_student_ids),
+            "relaxation_used": relaxation_used,
+            "fixed_regular_enrollment_ids": sorted(fixed_regular_ids),
+            "released_limited_enrollment_ids": sorted(limited_subject_ids) if relaxation_used else [],
+            "changed_enrollment_ids": sorted(changed_ids),
+            "unchanged_enrollment_ids": sorted(set(contracted_counts) - changed_ids),
+            "moved_non_target_limited_enrollment_ids": sorted(changed_ids & limited_subject_ids),
+            "previous_assignments": current,
+        }
+    )
+    return result
+
+
 # ---------------------------------------------------------
 # Step 4: 計算結果をSESSIONS/ASSIGNMENTSへ書き込む
 # ---------------------------------------------------------
@@ -588,16 +798,123 @@ def write_schedule_to_db(conn: sqlite3.Connection, camp_id: int, result: dict) -
     return {"n_sessions": n_sessions, "n_assignments": n_assignments}
 
 
-def run_scheduler_for_camp(conn: sqlite3.Connection, camp_id: int, time_limit_seconds: float = 7200.0) -> dict:
+def run_scheduler_for_camp(
+    conn: sqlite3.Connection,
+    camp_id: int,
+    time_limit_seconds: float = 7200.0,
+    target_student_ids: set[int] | None = None,
+) -> dict:
     """
     講習会1つ分について、解く→DBに書き込む、までを一気に行う一番外側の関数。
     戻り値には、解いた結果のサマリと、書き込んだ件数の両方を含む。
     """
-    result = solve_camp_core(conn, camp_id, time_limit_seconds=time_limit_seconds)
-    write_summary = write_schedule_to_db(conn, camp_id, result)
-    return {
+    result = solve_camp_core(
+        conn,
+        camp_id,
+        time_limit_seconds=time_limit_seconds,
+        target_student_ids=target_student_ids,
+    )
+    feasible = result["status"] in {"OPTIMAL", "FEASIBLE"}
+
+    # 部分再計算に失敗した場合は、現行時間割を消さずそのまま残す。
+    if target_student_ids is not None and not feasible:
+        n_sessions = conn.execute(
+            "SELECT COUNT(*) FROM SESSIONS WHERE camp_id = ?", (camp_id,)
+        ).fetchone()[0]
+        n_assignments = conn.execute(
+            """SELECT COUNT(*) FROM ASSIGNMENTS a
+               JOIN SESSIONS s ON s.session_id = a.session_id
+               WHERE s.camp_id = ?""",
+            (camp_id,),
+        ).fetchone()[0]
+        write_summary = {"n_sessions": n_sessions, "n_assignments": n_assignments}
+    else:
+        write_summary = write_schedule_to_db(conn, camp_id, result)
+
+    summary = {
         "status": result["status"],
         "unfulfilled": result["unfulfilled"],
         "n_sessions": write_summary["n_sessions"],
         "n_assignments": write_summary["n_assignments"],
     }
+    if target_student_ids is not None:
+        changed_ids = result.get("changed_enrollment_ids", [])
+        instructor_names = (
+            {
+                row[0]: f"{row[1]} {row[2]}"
+                for row in conn.execute(
+                    "SELECT instructor_id, last_name, first_name FROM INSTRUCTORS"
+                ).fetchall()
+            }
+            if changed_ids
+            else {}
+        )
+        slot_labels = (
+            {
+                row[0]: f"{row[1]} {row[2]}限"
+                for row in conn.execute(
+                    "SELECT slot_id, session_date, period_number FROM TIME_SLOTS"
+                ).fetchall()
+            }
+            if changed_ids
+            else {}
+        )
+
+        def describe_pairs(pairs: list[tuple[int, int]]) -> str:
+            if not pairs:
+                return "割当なし"
+            return " / ".join(
+                f"{slot_labels.get(slot_id, f'枠ID={slot_id}')}・"
+                f"{instructor_names.get(instructor_id, f'講師ID={instructor_id}')}"
+                for instructor_id, slot_id in sorted(pairs, key=lambda pair: pair[1])
+            )
+
+        enrollment_details = {
+            row[0]: {
+                "student_id": row[1],
+                "student_name": row[2],
+                "subject_name": row[3],
+            }
+            for row in conn.execute(
+                """SELECT e.enrollment_id, e.student_id,
+                          st.last_name || ' ' || st.first_name,
+                          su.subject_name
+                   FROM CAMP_COURSE_ENROLLMENTS e
+                   JOIN STUDENTS st ON st.student_id = e.student_id
+                   JOIN SUBJECTS su ON su.subject_id = e.subject_id
+                   WHERE e.camp_id = ?""",
+                (camp_id,),
+            ).fetchall()
+        }
+        changed_assignments = []
+        for enrollment_id in changed_ids:
+            detail = enrollment_details.get(enrollment_id, {})
+            before = result.get("previous_assignments", {}).get(enrollment_id, [])
+            after = result.get("assignments", {}).get(enrollment_id, [])
+            changed_assignments.append(
+                {
+                    "enrollment_id": enrollment_id,
+                    **detail,
+                    "before": before,
+                    "after": after,
+                    "before_display": describe_pairs(before),
+                    "after_display": describe_pairs(after),
+                    "is_non_target_limited": enrollment_id
+                    in result.get("moved_non_target_limited_enrollment_ids", []),
+                }
+            )
+        summary.update(
+            {
+                "partial_recalculation": True,
+                "target_student_ids": result.get("target_student_ids", []),
+                "relaxation_used": result.get("relaxation_used", False),
+                "changed_assignments": changed_assignments,
+                "n_changed_enrollments": len(changed_ids),
+                "n_unchanged_enrollments": len(result.get("unchanged_enrollment_ids", [])),
+                "moved_non_target_limited_enrollment_ids": result.get(
+                    "moved_non_target_limited_enrollment_ids", []
+                ),
+                "schedule_preserved": not feasible,
+            }
+        )
+    return summary
