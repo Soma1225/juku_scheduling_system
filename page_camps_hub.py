@@ -13,6 +13,8 @@ HUB_SECTIONS = [
         ("/camp-sync-groups", "兄弟等 同時受講グループ"),
         ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
         ("/image-import", "記入用紙 PDF取り込み"),
+        ("/image-import-review", "取込結果確認"),
+        ("/image-import-corrections", "確定済みレビューの訂正"),
     ]),
     ("講師情報", [
         ("/camp-availability-instructor", "講師 講習会中の対応可能時間"),
