@@ -25,6 +25,7 @@ import webbrowser
 import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+from pathlib import Path
 
 from db import ensure_db_exists, get_conn
 from layout import render_page
@@ -45,6 +46,10 @@ import page_schedule_view
 import page_run_scheduler
 import page_instructor_academic_year
 import page_excel_import
+import page_image_import
+import page_image_import_review
+import page_image_import_corrections
+from image_import_service import DEFAULT_STORAGE_ROOT
 
 PORT = 8000
 
@@ -72,6 +77,9 @@ ROUTES = {
     "/run-scheduler": (page_run_scheduler.render, page_run_scheduler.handle_post),
     "/instructor-academic-year": (page_instructor_academic_year.render, page_instructor_academic_year.handle_post),
     "/excel-import": (page_excel_import.render, page_excel_import.handle_post),
+    "/image-import": (page_image_import.render, page_image_import.handle_post),
+    "/image-import-review": (page_image_import_review.render, page_image_import_review.handle_post),
+    "/image-import-corrections": (page_image_import_corrections.render, page_image_import_corrections.handle_post),
 }
 
 
@@ -98,13 +106,17 @@ def parse_multipart(body: bytes, content_type: str) -> dict:
     files: dict = {}
 
     for segment in segments:
-        segment = segment.strip(b"\r\n")
+        # multipartの構文上付く改行だけを除去する。strip/rstripを使うと、
+        # PDF等のバイナリ本体が改行バイトで終わる場合に内容を壊してしまう。
+        if segment.startswith(b"\r\n"):
+            segment = segment[2:]
+        if segment.endswith(b"\r\n"):
+            segment = segment[:-2]
         if not segment or segment == b"--":
             continue
         if b"\r\n\r\n" not in segment:
             continue
         header_bytes, content = segment.split(b"\r\n\r\n", 1)
-        content = content.rstrip(b"\r\n")
         headers = header_bytes.decode("utf-8", errors="replace")
 
         name_match = re.search(r'name="([^"]*)"', headers)
@@ -131,6 +143,15 @@ class PortalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/image-import-preview":
+            self._serve_image_import_preview(parse_qs(parsed.query))
+            return
+        if path == "/image-import-review-crop":
+            self._serve_image_import_review_crop(parse_qs(parsed.query))
+            return
+        if path == "/image-import-attachment":
+            self._serve_image_import_attachment(parse_qs(parsed.query))
+            return
         if path not in ROUTES:
             self.send_response(404)
             self.end_headers()
@@ -178,6 +199,124 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_image_import_preview(self, qs: dict):
+        """DB上のpage_idに紐づく画像だけを返し、任意ファイル参照を防ぐ。"""
+        try:
+            page_id = int(qs.get("page_id", [""])[0])
+        except ValueError:
+            self.send_error(400, "invalid page_id")
+            return
+        kind = qs.get("kind", ["corrected"])[0]
+        if kind not in {"corrected", "original", "student_name", "grade"}:
+            self.send_error(400, "invalid preview kind")
+            return
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT page_image_path FROM IMAGE_IMPORT_PAGES WHERE page_id=? AND is_deleted=0",
+            (page_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            self.send_error(404)
+            return
+        corrected = Path(row[0]).resolve()
+        paths = {
+            "corrected": corrected,
+            "original": corrected.with_name(f"{corrected.stem}_original.png"),
+            "student_name": corrected.parent / f"{corrected.stem}_regions" / "student_name.png",
+            "grade": corrected.parent / f"{corrected.stem}_regions" / "grade.png",
+        }
+        image_path = paths[kind].resolve()
+        try:
+            image_path.relative_to(DEFAULT_STORAGE_ROOT.resolve())
+        except ValueError:
+            self.send_error(403)
+            return
+        if not image_path.is_file():
+            self.send_error(404)
+            return
+        body = image_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_image_import_review_crop(self, qs: dict):
+        try:
+            review_item_id = int(qs.get("review_item_id", [""])[0])
+        except ValueError:
+            self.send_error(400, "invalid review_item_id")
+            return
+        conn = get_conn()
+        row = conn.execute(
+            """
+            SELECT r.crop_image_path FROM IMAGE_IMPORT_REVIEW_ITEMS r
+            JOIN IMAGE_IMPORT_PAGES p ON p.page_id=r.page_id
+            JOIN IMAGE_IMPORT_BATCHES b ON b.batch_id=p.batch_id
+            WHERE r.review_item_id=? AND r.is_deleted=0 AND p.is_deleted=0 AND b.is_deleted=0
+            """,
+            (review_item_id,),
+        ).fetchone()
+        conn.close()
+        if not row or not row[0]:
+            self.send_error(404)
+            return
+        image_path = Path(row[0]).resolve()
+        try:
+            image_path.relative_to(DEFAULT_STORAGE_ROOT.resolve())
+        except ValueError:
+            self.send_error(403)
+            return
+        if not image_path.is_file():
+            self.send_error(404)
+            return
+        body = image_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_image_import_attachment(self, qs: dict):
+        try:
+            attachment_id = int(qs.get("attachment_id", [""])[0])
+        except ValueError:
+            self.send_error(400, "invalid attachment_id")
+            return
+        conn = get_conn()
+        row = conn.execute(
+            """
+            SELECT a.crop_image_path FROM IMAGE_IMPORT_ATTACHMENTS a
+            JOIN IMAGE_IMPORT_PAGES p ON p.page_id=a.page_id
+            JOIN IMAGE_IMPORT_BATCHES b ON b.batch_id=p.batch_id
+            WHERE a.attachment_id=? AND a.is_deleted=0 AND p.is_deleted=0 AND b.is_deleted=0
+            """,
+            (attachment_id,),
+        ).fetchone()
+        conn.close()
+        if not row:
+            self.send_error(404)
+            return
+        image_path = Path(row[0]).resolve()
+        try:
+            image_path.relative_to(DEFAULT_STORAGE_ROOT.resolve())
+        except ValueError:
+            self.send_error(403)
+            return
+        if not image_path.is_file():
+            self.send_error(404)
+            return
+        body = image_path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 

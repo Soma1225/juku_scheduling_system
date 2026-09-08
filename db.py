@@ -9,6 +9,8 @@ DB接続とスキーマ初期化だけを担当するモジュール。
 import sqlite3
 from pathlib import Path
 
+from image_import_migrations import ensure_image_import_schema
+
 DB_PATH = Path(__file__).parent / "juku_schedule.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
@@ -81,6 +83,7 @@ def ensure_db_exists() -> None:
         conn.close()
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON;")
     if conn.execute("SELECT COUNT(*) FROM PERIODS").fetchone()[0] == 0:
         conn.executemany(
             "INSERT INTO PERIODS (period_number, start_time, end_time) VALUES (?, ?, ?)",
@@ -95,6 +98,7 @@ def ensure_db_exists() -> None:
         )
         conn.commit()
     ensure_terms_exist(conn)
+    ensure_image_import_schema(conn)
     conn.close()
 
 
@@ -146,15 +150,26 @@ def get_current_academic_fiscal_year(today=None) -> int:
     return today.year if today.month >= 3 else today.year - 1
 
 
+def get_grade_at_fiscal_year(
+    enrollment_year: int,
+    base_grade: int,
+    academic_fiscal_year: int,
+) -> int:
+    """入塾年度・入塾時点の学年から、指定年度時点の学年を計算する。"""
+    return base_grade + (academic_fiscal_year - enrollment_year)
+
+
 def get_current_grade(enrollment_year: int, base_grade: int) -> int:
     """
     入塾年度・入塾時点の学年から、「今の学年」を自動計算する。
     (「毎年、全生徒の学年を手動で1つずつ進級させる」という作業を無くすため)
     留年などで実態とズレた場合は、base_gradeを手動修正することを想定している。
     """
-    current_fy = get_current_academic_fiscal_year()
-    elapsed_years = current_fy - enrollment_year
-    return base_grade + elapsed_years
+    return get_grade_at_fiscal_year(
+        enrollment_year,
+        base_grade,
+        get_current_academic_fiscal_year(),
+    )
 
 
 def format_grade_label(base_grade: int | None) -> str:

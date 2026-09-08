@@ -3,6 +3,10 @@
 *.db-journal
 *.sqlite
 *.sqlite3
+image_import_data/
+backups/
+image_import_config.json
+image_import_config.json.tmp
 
 # 個人情報を含む可能性のあるExcel/CSVファイル
 *.xlsx

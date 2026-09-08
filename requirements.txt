@@ -1,0 +1,7 @@
+# Existing Excel import
+openpyxl==3.1.5
+
+# Scan PDF rasterization and image processing
+pypdfium2==5.13.0
+Pillow==12.3.0
+opencv-python==4.10.0.84

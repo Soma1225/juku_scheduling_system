@@ -27,6 +27,7 @@ MENU_GROUPS = [
     ]),
     ("講習会時間割作成", [
         ("/camps", "講習会マスタ"),
+        ("/image-import", "記入用紙 PDF取り込み"),
         ("/camp-enrollments", "講習会 受講科目回数登録"),
         ("/camp-sync-groups", "兄弟等 同時受講グループ"),
         ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
@@ -44,6 +45,8 @@ MENU_GROUPS = [
 MENU = [("/", "ホーム")] + [item for _, items in MENU_GROUPS for item in items]
 
 ROUTE_TITLES = {path: label for path, label in MENU}
+ROUTE_TITLES["/image-import-review"] = "取込結果確認"
+ROUTE_TITLES["/image-import-corrections"] = "確定済みレビューの訂正"
 
 _LAYOUT = """<!DOCTYPE html>
 <html lang="ja">
@@ -181,6 +184,9 @@ WIDE_PATHS = {
     "/camp-availability-student", "/camp-availability-instructor",
     "/regular-enrollments", "/follow-enrollments", "/student-detail", "/camp-sync-groups",
     "/schedule-by-day", "/schedule-instructor", "/schedule-student", "/excel-import",
+    "/image-import",
+    "/image-import-review",
+    "/image-import-corrections",
 }
 
 
