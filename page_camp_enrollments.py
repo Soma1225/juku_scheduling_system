@@ -2,7 +2,7 @@
 """page_camp_enrollments.py: 講習会の受講科目回数登録(CAMP_COURSE_ENROLLMENTS)を登録するページ"""
 
 from datetime import date
-from db import get_conn, DEFAULT_MAX_SESSIONS_PER_DAY
+from db import get_conn, DEFAULT_MAX_SESSIONS_PER_DAY, is_instructor_ng_for_student
 from page_camps import list_camps
 from page_instructors import list_instructors
 
@@ -220,25 +220,32 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
 
     subject_id = int(get("subject_id"))
     assigned_instructor_id = int(get("assigned_instructor_id")) if get("assigned_instructor_id") else None
+    student_id = int(get("student_id"))
     new_id = insert_camp_enrollment(
-        conn, int(camp_id), int(get("student_id")), subject_id,
+        conn, int(camp_id), student_id, subject_id,
         int(get("contracted_count") or 0), get("format"),
         assigned_instructor_id,
         get("enrollment_end_date") or None,
     )
 
-    warning_html = ""
+    warnings = []
     if assigned_instructor_id is not None:
         from db import check_instructor_teaches_subject
+        instructor_name = conn.execute(
+            "SELECT last_name || first_name FROM INSTRUCTORS WHERE instructor_id = ?", (assigned_instructor_id,)
+        ).fetchone()
+        instructor_label = instructor_name[0] if instructor_name else "選択した講師"
         if not check_instructor_teaches_subject(conn, assigned_instructor_id, subject_id):
-            instructor_name = conn.execute(
-                "SELECT last_name || first_name FROM INSTRUCTORS WHERE instructor_id = ?", (assigned_instructor_id,)
-            ).fetchone()
-            warning_html = (
-                f'<div class="msg error">⚠️ 警告: {instructor_name[0] if instructor_name else "選択した講師"} は、'
-                f'この科目を担当科目として登録していません。選択に誤りがないか確認してください'
-                f'（登録自体はそのまま完了しています）</div>'
+            warnings.append(
+                f'⚠️ 警告: {instructor_label} は、この科目を担当科目として登録していません。'
+                '選択に誤りがないか確認してください（登録自体はそのまま完了しています）'
+            )
+        if is_instructor_ng_for_student(conn, student_id, assigned_instructor_id):
+            warnings.append(
+                f'⚠️ 警告: {instructor_label} は、この生徒のNG講師に指定されています。'
+                '選択に誤りがないか確認してください（登録自体はそのまま完了しています）'
             )
 
+    warning_html = "".join(f'<div class="msg error">{warning}</div>' for warning in warnings)
     message_html = f'<div class="msg success">登録しました → enrollment_id={new_id}</div>{warning_html}'
-    return message_html, {"camp_id": [camp_id]}
+    return message_html, {"camp_id": [camp_id], "student_id": [str(student_id)]}

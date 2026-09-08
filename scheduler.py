@@ -9,7 +9,10 @@ CP-SATで実際に時間割を解く前の「下準備」部分。
 優先順位(重複無しでこの順番に並べる):
   1. 個別指定講師(CAMP_COURSE_ENROLLMENTS.assigned_instructor_id)
   2. 通常授業の継続講師(REGULAR_COURSE_ENROLLMENTSで同じ科目を担当している講師)
-  3. 最終手段: 科目さえ合っていれば誰でもよい(INSTRUCTOR_SUBJECTS登録者から自動補完)
+  3. 生徒ごとの推奨講師(priority_rank順)
+  4. 最終手段: 科目さえ合っていれば誰でもよい(INSTRUCTOR_SUBJECTS登録者から自動補完)
+
+どの経路の候補でも、生徒の絶対NG講師は必ず除外する。
 """
 
 import sqlite3
@@ -40,10 +43,23 @@ def get_instructor_candidates(conn: sqlite3.Connection, enrollment_id: int) -> l
     active_instructor_ids = {
         row[0] for row in conn.execute("SELECT instructor_id FROM INSTRUCTORS WHERE status = '在籍'").fetchall()
     }
+    ng_instructor_ids = {
+        row[0]
+        for row in conn.execute(
+            """SELECT instructor_id FROM STUDENT_INSTRUCTOR_PREFERENCES
+               WHERE student_id = ? AND preference_type = 'NG'""",
+            (student_id,),
+        ).fetchall()
+    }
 
     def add(instructor_id):
         # 休職・辞職中の講師は、たとえ指定講師・継続講師・優先リストに載っていても候補から除外する
-        if instructor_id is not None and instructor_id not in seen and instructor_id in active_instructor_ids:
+        if (
+            instructor_id is not None
+            and instructor_id not in seen
+            and instructor_id in active_instructor_ids
+            and instructor_id not in ng_instructor_ids
+        ):
             ordered_candidates.append(instructor_id)
             seen.add(instructor_id)
 
@@ -59,7 +75,17 @@ def get_instructor_candidates(conn: sqlite3.Connection, enrollment_id: int) -> l
     if continuing:
         add(continuing[0])
 
-    # 3. 最終手段: ここまでで候補が1人も見つからなかった場合、
+    # 3. 生徒ごとの推奨講師(科目を問わず、priority_rank順)
+    preferred_rows = conn.execute(
+        """SELECT instructor_id FROM STUDENT_INSTRUCTOR_PREFERENCES
+           WHERE student_id = ? AND preference_type = 'PREFERRED'
+           ORDER BY priority_rank""",
+        (student_id,),
+    ).fetchall()
+    for (preferred_instructor_id,) in preferred_rows:
+        add(preferred_instructor_id)
+
+    # 4. 最終手段: ここまでで候補が1人も見つからなかった場合、
     #    科目さえ合っていれば誰でもよいので、INSTRUCTOR_SUBJECTSに登録されている
     #    講師を候補として補う。
     #    (候補リストの1番目を繰り返し使うほど目的関数のスコアが上がる設計のため、
@@ -123,7 +149,8 @@ def get_instructor_candidates(conn: sqlite3.Connection, enrollment_id: int) -> l
             for instructor_id in rotated:
                 add(instructor_id)
 
-    return ordered_candidates
+    # add()でも除外しているが、将来候補経路が増えてもNGが漏れないよう最終防衛線を置く。
+    return [instructor_id for instructor_id in ordered_candidates if instructor_id not in ng_instructor_ids]
 
 
 def build_candidates_for_camp(conn: sqlite3.Connection, camp_id: int) -> dict[int, list[int]]:
