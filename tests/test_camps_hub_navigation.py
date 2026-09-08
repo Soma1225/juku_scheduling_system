@@ -36,6 +36,8 @@ class CampsHubNavigationTest(unittest.TestCase):
             "/camp-sync-groups",
             "/camp-availability-student",
             "/image-import",
+            "/image-import-review",
+            "/image-import-corrections",
             "/camp-availability-instructor",
             "/run-scheduler",
             "/schedule-by-day",
@@ -44,6 +46,12 @@ class CampsHubNavigationTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(f'href="{path}"', html)
                 self.assertIn(path, app.ROUTES)
+
+        self.assertLess(html.index('href="/image-import"'), html.index('href="/image-import-review"'))
+        self.assertLess(
+            html.index('href="/image-import-review"'),
+            html.index('href="/image-import-corrections"'),
+        )
 
     def test_hub_route_is_get_only(self):
         self.assertEqual(app.ROUTES["/camps-hub"], (page_camps_hub.render, None))
