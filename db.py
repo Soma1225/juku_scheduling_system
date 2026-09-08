@@ -220,6 +220,15 @@ def check_instructor_teaches_subject(conn, instructor_id: int, subject_id: int) 
     return False
 
 
+def is_instructor_ng_for_student(conn, student_id: int, instructor_id: int) -> bool:
+    """生徒に対して講師が「絶対NG」として登録されているかを返す。"""
+    return conn.execute(
+        """SELECT 1 FROM STUDENT_INSTRUCTOR_PREFERENCES
+           WHERE student_id = ? AND instructor_id = ? AND preference_type = 'NG'""",
+        (student_id, instructor_id),
+    ).fetchone() is not None
+
+
 def list_terms(conn: sqlite3.Connection) -> list[tuple[int, str]]:
     """学期一覧を取得する(対応可能時間ページなどから参照される共有関数)。"""
     return conn.execute("SELECT term_id, term_name FROM TERMS ORDER BY start_date").fetchall()

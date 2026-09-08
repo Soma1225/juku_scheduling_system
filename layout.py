@@ -15,6 +15,7 @@ MENU_GROUPS = [
     ("生徒情報", [
         ("/students", "生徒登録"),
         ("/student-detail", "生徒詳細"),
+        ("/student-instructor-preferences", "生徒ごとの推奨・NG講師"),
         ("/regular-enrollments", "通常授業 契約登録"),
         ("/follow-enrollments", "教科フォロー登録"),
         ("/student-availability", "生徒 対応可能時間"),
@@ -187,6 +188,7 @@ WIDE_PATHS = {
     "/image-import",
     "/image-import-review",
     "/image-import-corrections",
+    "/student-instructor-preferences",
 }
 
 
