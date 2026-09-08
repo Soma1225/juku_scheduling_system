@@ -19,6 +19,7 @@ MENU_GROUPS = [
         ("/regular-enrollments", "通常授業 契約登録"),
         ("/follow-enrollments", "教科フォロー登録"),
         ("/student-availability", "生徒 対応可能時間"),
+        ("/schedule-student", "生徒視点の時間割"),
     ]),
     ("講師情報", [
         ("/instructors", "講師登録"),
@@ -26,20 +27,10 @@ MENU_GROUPS = [
         ("/instructor-subjects", "講師 担当科目"),
         ("/instructor-availability", "講師 対応可能時間"),
         ("/instructor-academic-year", "講師 学年更新の確認"),
-    ]),
-    ("講習会時間割作成", [
-        ("/camps", "講習会マスタ"),
-        ("/image-import", "記入用紙 PDF取り込み"),
-        ("/camp-enrollments", "講習会 受講科目回数登録"),
-        ("/camp-sync-groups", "兄弟等 同時受講グループ"),
-        ("/camp-availability-student", "生徒 講習会中の対応可能時間"),
-        ("/camp-availability-instructor", "講師 講習会中の対応可能時間"),
-        ("/run-scheduler", "スケジューリングの実行"),
-    ]),
-    ("組まれた時間割の確認", [
-        ("/schedule-by-day", "日付単位の授業スケジュール"),
         ("/schedule-instructor", "講師視点の時間割"),
-        ("/schedule-student", "生徒視点の時間割"),
+    ]),
+    ("講習会", [
+        ("/camps-hub", "講習会"),
     ]),
 ]
 
@@ -70,6 +61,10 @@ _LAYOUT = """<!DOCTYPE html>
   nav .home-link.active {{ background:#0F6E56; color:#fff; font-weight:bold; }}
   nav .group-title {{ padding:14px 20px 6px; font-size:11px; letter-spacing:0.05em; color:#8fb0b8;
                        text-transform:uppercase; }}
+  nav .group-link {{ display:block; padding:14px 20px; margin-top:8px; color:#d8e6ea;
+                      text-decoration:none; font-size:13px; border-top:1px solid rgba(255,255,255,0.1); }}
+  nav .group-link:hover {{ background:#163a47; }}
+  nav .group-link.active {{ background:#0F6E56; color:#fff; font-weight:bold; }}
   nav a {{ display:block; padding:8px 20px 8px 28px; color:#d8e6ea; text-decoration:none; font-size:13px; }}
   nav a:hover {{ background:#163a47; }}
   nav a.active {{ background:#0F6E56; color:#fff; font-weight:bold; }}
@@ -112,6 +107,14 @@ _LAYOUT = """<!DOCTYPE html>
   .menu-card-title {{ font-size:14px; font-weight:bold; color:#1F4E5F; }}
   .menu-card-desc {{ font-size:12px; color:#888; margin-top:2px; }}
   .menu-card-arrow {{ font-size:20px; color:#ccc; }}
+  .hub-grid {{ display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:16px; margin-top:20px; }}
+  .hub-card {{ border:1px solid #e5e5e5; border-radius:10px; padding:18px 20px; background:#fafbf9; }}
+  .hub-card h2 {{ margin:0 0 10px; color:#1F4E5F; font-size:16px; }}
+  .hub-card ul {{ margin:0; padding-left:20px; }}
+  .hub-card li {{ margin:8px 0; font-size:13px; }}
+  .hub-card a {{ color:#0F6E56; text-decoration:none; }}
+  .hub-card a:hover {{ text-decoration:underline; }}
+  @media (max-width:800px) {{ .hub-grid {{ grid-template-columns:1fr; }} }}
 
   /* --- ホームダッシュボード(時間割・教科フォロー・通知欄) --- */
   .date-nav {{ display:flex; align-items:center; gap:16px; margin-bottom:12px; }}
@@ -247,6 +250,7 @@ WIDE_PATHS = {
     "/image-import-review",
     "/image-import-corrections",
     "/student-instructor-preferences",
+    "/camps-hub",
 }
 
 
@@ -255,6 +259,12 @@ def render_page(path: str, content: str) -> bytes:
     home_class = "active" if path == "/" else ""
     nav_links = f'<a href="/" class="home-link {home_class}">ホーム</a>'
     for group_name, items in MENU_GROUPS:
+        # グループ名と唯一のリンク名が同じ場合は、展開見出しを作らず単独リンクとして描画する。
+        if len(items) == 1 and items[0][1] == group_name:
+            item_path, label = items[0]
+            active_class = "active" if item_path == path else ""
+            nav_links += f'<a href="{item_path}" class="group-link {active_class}">{label}</a>'
+            continue
         nav_links += f'<div class="group-title">{group_name}</div>'
         nav_links += "".join(
             f'<a href="{p}" class="{"active" if p == path else ""}">{label}</a>' for p, label in items
