@@ -50,6 +50,7 @@ import page_image_import
 import page_image_import_review
 import page_image_import_corrections
 import page_student_instructor_preferences
+import page_instructor_detail
 from image_import_service import DEFAULT_STORAGE_ROOT
 
 PORT = 8000
@@ -85,6 +86,7 @@ ROUTES = {
         page_student_instructor_preferences.render,
         page_student_instructor_preferences.handle_post,
     ),
+    "/instructor-detail": (page_instructor_detail.render, None),
 }
 
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """page_instructors.py: 講師(INSTRUCTORS)の登録・管理(担当科目の初期登録も同じ画面で行う)"""
 
+import html
 import sqlite3
 from db import get_conn
 
@@ -286,18 +287,29 @@ def render(qs: dict, message_html: str = "") -> str:
     conn = get_conn()
     rows = conn.execute(
         "SELECT instructor_id, last_name, first_name, last_name_kana, first_name_kana, "
-        "external_instructor_id, academic_year, status FROM INSTRUCTORS ORDER BY last_name_kana, first_name_kana"
+        "external_instructor_id, academic_year, status, "
+        "(SELECT COUNT(*) FROM INSTRUCTOR_SUBJECTS isub WHERE isub.instructor_id = INSTRUCTORS.instructor_id) "
+        "FROM INSTRUCTORS ORDER BY last_name_kana, first_name_kana"
     ).fetchall()
     subject_checklist, n_items = _subject_checklist_html(conn)
     conn.close()
 
     rows_html = ""
     for r in rows:
-        iid, ln, fn, lk, fk, ext_id, ay, status = r
+        iid, ln, fn, lk, fk, ext_id, ay, status, subject_count = r
         status_color = {"在籍": "#0F6E56", "休職": "#B8860B", "辞職": "#888"}.get(status, "#333")
+        summary_html = (
+            f"<strong>{html.escape(ln)} {html.escape(fn)}</strong><br>"
+            f"学年: {html.escape(ay)}<br>ステータス: {html.escape(status)}<br>"
+            f"担当科目: {subject_count}科目"
+        )
         rows_html += f"""
         <tr>
-          <td>{ln} {fn}（{lk}{fk}）</td>
+          <td><span class="person-quick-view" tabindex="0" role="button"
+                    data-detail-url="/instructor-detail?instructor_id={iid}"
+                    data-summary-html="{html.escape(summary_html, quote=True)}"
+                    title="シングルクリックで概要、ダブルクリックで詳細">{html.escape(ln)} {html.escape(fn)}</span>
+              （{html.escape(lk)}{html.escape(fk)}）</td>
           <td>{ay}</td>
           <td><span style="color:{status_color};font-weight:bold;">{status}</span></td>
           <td>{ext_id or '-'}</td>
@@ -383,6 +395,7 @@ def render(qs: dict, message_html: str = "") -> str:
       }}
     </script>
     <h1 style="font-size:14px;margin-top:28px;">登録済みの講師 ({len(rows)}名)</h1>
+    <div class="hint">名前をシングルクリックすると概要、ダブルクリックすると講師詳細を表示します</div>
     <table>
       <tr><th>氏名</th><th>学年</th><th>ステータス</th><th>講師番号</th><th></th><th></th></tr>
       {rows_html}

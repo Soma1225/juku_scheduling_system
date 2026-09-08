@@ -22,6 +22,7 @@ MENU_GROUPS = [
     ]),
     ("講師情報", [
         ("/instructors", "講師登録"),
+        ("/instructor-detail", "講師詳細"),
         ("/instructor-subjects", "講師 担当科目"),
         ("/instructor-availability", "講師 対応可能時間"),
         ("/instructor-academic-year", "講師 学年更新の確認"),
@@ -159,6 +160,13 @@ _LAYOUT = """<!DOCTYPE html>
   .notice-list a {{ color:#1F4E5F; text-decoration:none; }}
   .priority-badge {{ display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
                       border-radius:50%; background:#D3382F; color:#fff; font-size:10px; font-weight:bold; flex-shrink:0; }}
+  .person-quick-view {{ color:#1F4E5F; cursor:pointer; text-decoration:underline dotted;
+                        text-underline-offset:3px; user-select:none; }}
+  .person-quick-view:focus {{ outline:2px solid #6aa6ba; outline-offset:2px; border-radius:2px; }}
+  .person-quick-view-popover {{ position:fixed; z-index:1000; min-width:210px; max-width:320px;
+                                padding:10px 12px; background:#fff; color:#333; border:1px solid #d6d6d2;
+                                border-radius:7px; box-shadow:0 4px 16px rgba(0,0,0,0.18); font-size:12px;
+                                line-height:1.7; }}
 </style>
 </head>
 <body>
@@ -173,6 +181,56 @@ _LAYOUT = """<!DOCTYPE html>
     </div>
   </main>
 </div>
+<script>
+  let activePersonQuickView = null;
+
+  function closePersonQuickView() {{
+    if (activePersonQuickView) activePersonQuickView.remove();
+    activePersonQuickView = null;
+  }}
+
+  function showQuickView(el, summaryHtml) {{
+    closePersonQuickView();
+    const popover = document.createElement('div');
+    popover.className = 'person-quick-view-popover';
+    popover.innerHTML = summaryHtml;
+    document.body.appendChild(popover);
+    const rect = el.getBoundingClientRect();
+    const left = Math.min(rect.left, window.innerWidth - popover.offsetWidth - 12);
+    popover.style.left = Math.max(12, left) + 'px';
+    popover.style.top = Math.min(rect.bottom + 6, window.innerHeight - popover.offsetHeight - 12) + 'px';
+    activePersonQuickView = popover;
+  }}
+
+  function setupPersonQuickView(el, detailUrl, summaryHtml) {{
+    let clickTimer = null;
+    el.addEventListener('click', function(event) {{
+      event.stopPropagation();
+      if (clickTimer) {{
+        clearTimeout(clickTimer);
+        clickTimer = null;
+        closePersonQuickView();
+        location.href = detailUrl;
+      }} else {{
+        clickTimer = setTimeout(function() {{
+          clickTimer = null;
+          showQuickView(el, summaryHtml);
+        }}, 250);
+      }}
+    }});
+    el.addEventListener('keydown', function(event) {{
+      if (event.key === 'Enter') location.href = detailUrl;
+      if (event.key === 'Escape') closePersonQuickView();
+    }});
+  }}
+
+  document.addEventListener('DOMContentLoaded', function() {{
+    document.querySelectorAll('.person-quick-view').forEach(function(el) {{
+      setupPersonQuickView(el, el.dataset.detailUrl, el.dataset.summaryHtml);
+    }});
+  }});
+  document.addEventListener('click', closePersonQuickView);
+</script>
 </body>
 </html>
 """
