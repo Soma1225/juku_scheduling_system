@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """page_students.py: 生徒(STUDENTS)の新規登録"""
 
-from db import get_current_academic_fiscal_year
+import datetime
+import html
+
+from db import format_grade_label, get_conn, get_current_academic_fiscal_year, get_current_grade
 
 GENDERS = ["", "男", "女", "その他"]
 
@@ -54,6 +57,42 @@ def _gender_options() -> str:
 
 def render(qs: dict, message_html: str = "") -> str:
     current_fy = get_current_academic_fiscal_year()
+    today = datetime.date.today().isoformat()
+    conn = get_conn()
+    students = conn.execute(
+        """SELECT s.student_id, s.last_name, s.first_name,
+                  s.enrollment_year, s.base_grade, s.enrollment_status,
+                  s.external_student_id,
+                  (SELECT COUNT(DISTINCT regular.subject_id)
+                   FROM REGULAR_COURSE_ENROLLMENTS regular
+                   WHERE regular.student_id = s.student_id
+                     AND regular.effective_start_date <= ?
+                     AND (regular.effective_end_date IS NULL OR regular.effective_end_date > ?))
+                    AS regular_subject_count
+           FROM STUDENTS s
+           ORDER BY s.last_name_kana, s.first_name_kana""",
+        (today, today),
+    ).fetchall()
+    conn.close()
+
+    student_rows = ""
+    for student_id, last_name, first_name, enrollment_year, base_grade, status, external_id, subject_count in students:
+        grade = format_grade_label(get_current_grade(enrollment_year, base_grade))
+        summary_html = (
+            f"<strong>{html.escape(last_name)} {html.escape(first_name)}</strong><br>"
+            f"学年: {html.escape(grade)}<br>ステータス: {html.escape(status)}<br>"
+            f"現在の通常授業: {subject_count}科目"
+        )
+        student_rows += f"""
+        <tr>
+          <td><span class="person-quick-view" tabindex="0" role="button"
+                    data-detail-url="/student-detail?student_id={student_id}"
+                    data-summary-html="{html.escape(summary_html, quote=True)}"
+                    title="シングルクリックで概要、ダブルクリックで詳細">{html.escape(last_name)} {html.escape(first_name)}</span></td>
+          <td>{html.escape(grade)}</td><td>{html.escape(status)}</td><td>{html.escape(external_id or '-')}</td>
+        </tr>
+        """
+
     return f"""
     <h1>生徒 新規登録</h1>
     {message_html}
@@ -138,6 +177,12 @@ def render(qs: dict, message_html: str = "") -> str:
       setupFuriganaAutofill('last_name', 'last_name_kana');
       setupFuriganaAutofill('first_name', 'first_name_kana');
     </script>
+    <h1 style="font-size:14px;margin-top:28px;">登録済みの生徒 ({len(students)}名)</h1>
+    <div class="hint">名前をシングルクリックすると概要、ダブルクリックすると生徒詳細を表示します</div>
+    <table>
+      <tr><th>氏名</th><th>学年</th><th>ステータス</th><th>外部生徒ID</th></tr>
+      {student_rows}
+    </table>
     """
 
 
