@@ -36,6 +36,7 @@ import page_subjects
 import page_availability
 import page_instructor_subjects
 import page_camps
+import page_camps_hub
 import page_camp_enrollments
 import page_camp_availability
 import page_regular_enrollments
@@ -66,6 +67,7 @@ ROUTES = {
     "/instructor-availability": (page_availability.render_instructor, page_availability.handle_post_instructor),
     "/instructor-subjects": (page_instructor_subjects.render, page_instructor_subjects.handle_post),
     "/camps": (page_camps.render, page_camps.handle_post),
+    "/camps-hub": (page_camps_hub.render, None),
     "/camp-enrollments": (page_camp_enrollments.render, page_camp_enrollments.handle_post),
     "/camp-availability-student": (page_camp_availability.render_student, page_camp_availability.handle_post_student),
     "/camp-availability-instructor": (page_camp_availability.render_instructor, page_camp_availability.handle_post_instructor),
