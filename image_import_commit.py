@@ -59,6 +59,9 @@ def build_import_plan(conn, *, batch_id: int) -> ImportPlan:
     if batch_status == "IMPORTED":
         plan.blockers.append("このバッチは既に本登録済みです")
         return plan
+    if camp_id is None:
+        plan.blockers.append("通常授業用紙の本登録は今回の対象外です（認識結果の確認のみ可能です）")
+        return plan
 
     page_count = conn.execute(
         "SELECT COUNT(*) FROM IMAGE_IMPORT_PAGES WHERE batch_id=? AND is_deleted=0 AND processing_status<>'SKIPPED'",

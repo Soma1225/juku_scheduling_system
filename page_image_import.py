@@ -28,7 +28,7 @@ def render(qs: dict, message_html: str = "") -> str:
         SELECT b.batch_id,c.camp_name,b.paper_fiscal_year,b.paper_type,
                b.page_count,b.status,b.created_at,
                SUM(CASE WHEN p.layout_quality <> 'OK' THEN 1 ELSE 0 END)
-        FROM IMAGE_IMPORT_BATCHES b JOIN CAMPS c ON c.camp_id=b.camp_id
+        FROM IMAGE_IMPORT_BATCHES b LEFT JOIN CAMPS c ON c.camp_id=b.camp_id
         JOIN IMAGE_IMPORT_PAGES p ON p.batch_id=b.batch_id AND p.is_deleted=0
         WHERE b.is_deleted=0
         GROUP BY b.batch_id
@@ -48,14 +48,14 @@ def render(qs: dict, message_html: str = "") -> str:
     )
     batch_rows = "".join(
         f'<tr><td><a href="/image-import-review?batch_id={row[0]}">#{row[0]}</a></td>'
-        f"<td>{html.escape(row[1])}</td><td>{row[2]}年度 {html.escape(row[3])}</td>"
+        f"<td>{html.escape(row[1] or '通常授業')}</td><td>{row[2]}年度 {html.escape(row[3])}</td>"
         f"<td>{row[4]}ページ</td><td>{row[5]}{'（要確認' + str(row[7]) + 'ページ）' if row[7] else ''}</td><td>{row[6]}</td></tr>"
         for row in batches
     ) or '<tr><td colspan="6">取り込み履歴はありません</td></tr>'
 
     return f"""
     <h1>記入用紙 PDF取り込み</h1>
-    <div class="hint">複合機で一括スキャンしたPDFを、講習会単位で登録します。この段階では本登録データは変更しません。</div>
+    <div class="hint">複合機で一括スキャンしたPDFを登録します。この段階では本登録データは変更しません。</div>
     {message_html}
     <div style="border:1px solid #e5e5e5;border-radius:8px;padding:12px 14px;margin:16px 0;">
       <div style="font-size:13px;font-weight:bold;">本登録前バックアップの保存先</div>
@@ -78,13 +78,13 @@ def render(qs: dict, message_html: str = "") -> str:
     </div>
     <form method="POST" action="/image-import" enctype="multipart/form-data">
       <input type="hidden" name="action" value="upload">
-      <label>対象講習会 <span class="req">*</span></label>
-      <select name="camp_id" required>{camp_options}</select>
+      <label>対象講習会（通常授業用紙では選択不要）</label>
+      <select name="camp_id">{camp_options}</select>
       <label>用紙年度 <span class="req">*</span></label>
       <select name="paper_fiscal_year" required>{year_options}</select>
       <label>講習会種別 <span class="req">*</span></label>
       <select name="paper_type" required>
-        <option value="夏期">夏期</option><option value="冬期">冬期</option><option value="春期">春期</option>
+        <option value="通常">通常</option><option value="夏期">夏期</option><option value="冬期">冬期</option><option value="春期">春期</option>
       </select>
       <label>スキャンPDF <span class="req">*</span></label>
       <input type="file" name="scan_pdf" accept="application/pdf,.pdf" required>
@@ -141,27 +141,29 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
     if not file_info["filename"].lower().endswith(".pdf"):
         raise ValueError("拡張子が.pdfのファイルを選択してください")
     try:
-        camp_id = int(get("camp_id"))
         fiscal_year = int(get("paper_fiscal_year"))
     except (TypeError, ValueError):
-        raise ValueError("講習会と用紙年度を選択してください")
+        raise ValueError("用紙年度を選択してください")
     paper_type = get("paper_type")
-    if paper_type not in ("夏期", "冬期", "春期"):
-        raise ValueError("講習会種別を選択してください")
+    if paper_type not in ("通常", "夏期", "冬期", "春期"):
+        raise ValueError("用紙種別を選択してください")
+    if paper_type == "通常":
+        camp_id = None
+    else:
+        try:
+            camp_id = int(get("camp_id"))
+        except (TypeError, ValueError):
+            raise ValueError("講習会用紙では対象講習会を選択してください")
 
-    batch_id, page_count, duplicate_ids = create_import_batch(
+    batch_id, page_count, _ = create_import_batch(
         conn,
         camp_id=camp_id,
         paper_fiscal_year=fiscal_year,
         paper_type=paper_type,
         pdf_content=file_info["content"],
     )
-    duplicate_note = (
-        f" 同じPDFの既存バッチがあります: {', '.join('#' + str(i) for i in duplicate_ids)}"
-        if duplicate_ids else ""
-    )
     return (
         f'<div class="msg success">バッチ#{batch_id}として{page_count}ページを登録しました。'
-        f'本登録データはまだ変更していません。{html.escape(duplicate_note)}</div>',
+        '本登録データはまだ変更していません。</div>',
         {},
     )
