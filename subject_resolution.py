@@ -18,7 +18,7 @@ def _grade_band(grade: int) -> str:
         return "小学生高学年"
     if 7 <= grade <= 9:
         return "中学生"
-    if 10 <= grade <= 12:
+    if 10 <= grade <= 13:
         return "高校生"
     raise ValueError(f"用紙年度時点の学年が範囲外です: {grade}")
 

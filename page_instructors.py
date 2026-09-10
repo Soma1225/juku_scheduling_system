@@ -297,10 +297,11 @@ def render(qs: dict, message_html: str = "") -> str:
     rows_html = ""
     for r in rows:
         iid, ln, fn, lk, fk, ext_id, ay, status, subject_count = r
+        academic_year_label = ay or "未設定"
         status_color = {"在籍": "#0F6E56", "休職": "#B8860B", "辞職": "#888"}.get(status, "#333")
         summary_html = (
             f"<strong>{html.escape(ln)} {html.escape(fn)}</strong><br>"
-            f"学年: {html.escape(ay)}<br>ステータス: {html.escape(status)}<br>"
+            f"学年: {html.escape(academic_year_label)}<br>ステータス: {html.escape(status)}<br>"
             f"担当科目: {subject_count}科目"
         )
         rows_html += f"""
@@ -310,7 +311,7 @@ def render(qs: dict, message_html: str = "") -> str:
                     data-summary-html="{html.escape(summary_html, quote=True)}"
                     title="シングルクリックで概要、ダブルクリックで詳細">{html.escape(ln)} {html.escape(fn)}</span>
               （{html.escape(lk)}{html.escape(fk)}）</td>
-          <td>{ay}</td>
+          <td>{html.escape(academic_year_label)}</td>
           <td><span style="color:{status_color};font-weight:bold;">{status}</span></td>
           <td>{ext_id or '-'}</td>
           <td>

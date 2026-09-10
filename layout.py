@@ -10,7 +10,7 @@ layout.py
 MENU_GROUPS = [
     ("基本設定", [
         ("/subjects", "科目マスタ"),
-        ("/excel-import", "通常授業 Excel取り込み"),
+        ("/excel-import", "生徒・通常授業 Excel取り込み"),
     ]),
     ("生徒情報", [
         ("/students", "生徒登録"),
@@ -23,6 +23,7 @@ MENU_GROUPS = [
     ]),
     ("講師情報", [
         ("/instructors", "講師登録"),
+        ("/instructor-import", "講師マスタ Excel取り込み"),
         ("/instructor-detail", "講師詳細"),
         ("/instructor-subjects", "講師 担当科目"),
         ("/instructor-availability", "講師 対応可能時間"),

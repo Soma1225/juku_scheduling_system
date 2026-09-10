@@ -32,6 +32,7 @@ from layout import render_page
 import page_home
 import page_students
 import page_instructors
+import page_instructor_import
 import page_subjects
 import page_availability
 import page_instructor_subjects
@@ -62,6 +63,7 @@ ROUTES = {
     "/": (page_home.render, page_home.handle_post),
     "/students": (page_students.render, page_students.handle_post),
     "/instructors": (page_instructors.render, page_instructors.handle_post),
+    "/instructor-import": (page_instructor_import.render, page_instructor_import.handle_post),
     "/subjects": (page_subjects.render, page_subjects.handle_post),
     "/student-availability": (page_availability.render_student, page_availability.handle_post_student),
     "/instructor-availability": (page_availability.render_instructor, page_availability.handle_post_instructor),

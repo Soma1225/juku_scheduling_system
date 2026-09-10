@@ -106,6 +106,7 @@ def render(qs: dict, message_html: str = "") -> str:
         if info is None:
             body_html = '<div class="msg error">選択された講師が見つかりません</div>'
         else:
+            academic_year_label = info[2] or "未設定"
             subjects = _get_subjects_for_instructor(conn, int(instructor_id))
             subject_rows = "".join(
                 f"<tr><td>{html.escape(row['grade_band'])}</td>"
@@ -142,7 +143,7 @@ def render(qs: dict, message_html: str = "") -> str:
             body_html = f"""
             <div style="margin-top:16px;padding:14px;background:#f7f8f7;border-radius:7px;">
               <strong>{html.escape(info[0])} {html.escape(info[1])}</strong><br>
-              <span style="font-size:13px;color:#666;">学年: {html.escape(info[2])} / ステータス: {html.escape(info[3])}</span>
+              <span style="font-size:13px;color:#666;">学年: {html.escape(academic_year_label)} / ステータス: {html.escape(info[3])}</span>
             </div>
 
             <h1 style="font-size:14px;color:#534AB7;margin-top:26px;">担当科目</h1>
