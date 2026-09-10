@@ -27,7 +27,7 @@ def render(qs: dict, message_html: str = "") -> str:
     batch = conn.execute(
         """
         SELECT b.batch_id,c.camp_name,b.paper_fiscal_year,b.paper_type,b.status,b.camp_id
-        FROM IMAGE_IMPORT_BATCHES b JOIN CAMPS c ON c.camp_id=b.camp_id
+        FROM IMAGE_IMPORT_BATCHES b LEFT JOIN CAMPS c ON c.camp_id=b.camp_id
         WHERE b.batch_id=? AND b.is_deleted=0
         """,
         (batch_id,),
@@ -370,7 +370,7 @@ def render(qs: dict, message_html: str = "") -> str:
             """
         elif quality != "OK":
             manual_links = ""
-            if selected_candidate:
+            if selected_candidate and batch[5] is not None:
                 manual_links = (
                     f'<div style="margin-top:10px;font-size:13px;">手入力先: '
                     f'<a href="/camp-enrollments?camp_id={batch[5]}&student_id={selected_candidate[6]}">受講科目・回数</a> ／ '
@@ -405,13 +405,10 @@ def render(qs: dict, message_html: str = "") -> str:
                    style="width:100%;max-height:620px;object-fit:contain;border:1px solid #ddd;">
             </a>
             <div>
-              <div class="hint" style="margin-bottom:4px;">氏名欄</div>
-              <img src="/image-import-preview?page_id={page_id}&kind=student_name"
+              <div class="hint" style="margin-bottom:4px;">生徒ID QRコード欄</div>
+              <img src="/image-import-preview?page_id={page_id}&kind=student_qr"
                    style="width:100%;border:1px solid #ddd;">
-              <div class="hint" style="margin:14px 0 4px;">学年欄</div>
-              <img src="/image-import-preview?page_id={page_id}&kind=grade"
-                   style="width:55%;border:1px solid #ddd;">
-              <p style="font-size:13px;">認識: {html.escape(recognized_name or '-')}／{html.escape(recognized_grade or '-')}</p>
+              <p style="font-size:13px;">氏名画像の認識は行わず、QR内のstudent_idだけを照合します。</p>
             </div>
           </div>
           {confirm_form_start}
@@ -450,7 +447,7 @@ def render(qs: dict, message_html: str = "") -> str:
 
     return f"""
     <h1>取込結果確認: バッチ#{batch[0]}</h1>
-    <div class="hint">{html.escape(batch[1])} ／ {batch[2]}年度 {html.escape(batch[3])} ／ {batch[4]}</div>
+    <div class="hint">{html.escape(batch[1] or '通常授業')} ／ {batch[2]}年度 {html.escape(batch[3])} ／ {batch[4]}</div>
     {message_html}
     <a href="/image-import" style="font-size:13px;">← PDF取り込みへ戻る</a>
     <span style="margin-left:16px;"><a href="/image-import-corrections?batch_id={batch_id}" style="font-size:13px;">確定済みレビューを訂正</a></span>

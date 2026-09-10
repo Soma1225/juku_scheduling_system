@@ -4,13 +4,13 @@
 
 CREATE TABLE IMAGE_IMPORT_BATCHES (
     batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    camp_id INTEGER NOT NULL REFERENCES CAMPS(camp_id),
+    camp_id INTEGER REFERENCES CAMPS(camp_id),
     paper_fiscal_year INTEGER NOT NULL,
     paper_type TEXT NOT NULL,
     layout_key TEXT NOT NULL,
     layout_version INTEGER NOT NULL,
     source_pdf_path TEXT NOT NULL,
-    source_pdf_hash TEXT NOT NULL CHECK (LENGTH(source_pdf_hash) = 64),
+    source_pdf_hash TEXT NOT NULL UNIQUE CHECK (LENGTH(source_pdf_hash) = 64),
     page_count INTEGER NOT NULL CHECK (page_count > 0),
     status TEXT NOT NULL DEFAULT 'PROCESSING'
         CHECK (status IN ('PROCESSING','REVIEW_PENDING','REVIEWED','IMPORTED','CANCELLED')),

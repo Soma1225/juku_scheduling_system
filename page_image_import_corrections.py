@@ -55,7 +55,7 @@ def render(qs: dict, message_html: str = "") -> str:
     batch = conn.execute(
         """
         SELECT b.batch_id,c.camp_name,b.paper_fiscal_year,b.paper_type,b.status
-        FROM IMAGE_IMPORT_BATCHES b JOIN CAMPS c ON c.camp_id=b.camp_id
+        FROM IMAGE_IMPORT_BATCHES b LEFT JOIN CAMPS c ON c.camp_id=b.camp_id
         WHERE b.batch_id=? AND b.is_deleted=0
         """,
         (batch_id,),
@@ -159,7 +159,7 @@ def render(qs: dict, message_html: str = "") -> str:
     empty = '<div class="hint">訂正可能な確定済み項目はありません。</div>' if not cards else ""
     return f"""
     <h1>確定済みレビューの訂正</h1>
-    <div class="hint">{html.escape(batch[1])} ／ {batch[2]}年度 {html.escape(batch[3])} ／ {batch[4]}</div>
+    <div class="hint">{html.escape(batch[1] or '通常授業')} ／ {batch[2]}年度 {html.escape(batch[3])} ／ {batch[4]}</div>
     {message_html}
     <p><a href="/image-import-review?batch_id={batch_id}">← 取込結果確認へ戻る</a></p>
     <div class="hint">元の判断は変更せず、新しいレビュー項目と監査ログを追加します。</div>

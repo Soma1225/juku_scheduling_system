@@ -221,7 +221,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             self.send_error(400, "invalid page_id")
             return
         kind = qs.get("kind", ["corrected"])[0]
-        if kind not in {"corrected", "original", "student_name", "grade"}:
+        if kind not in {"corrected", "original", "student_name", "grade", "student_qr"}:
             self.send_error(400, "invalid preview kind")
             return
         conn = get_conn()
@@ -239,6 +239,7 @@ class PortalHandler(BaseHTTPRequestHandler):
             "original": corrected.with_name(f"{corrected.stem}_original.png"),
             "student_name": corrected.parent / f"{corrected.stem}_regions" / "student_name.png",
             "grade": corrected.parent / f"{corrected.stem}_regions" / "grade.png",
+            "student_qr": corrected.parent / f"{corrected.stem}_regions" / "student_qr.png",
         }
         image_path = paths[kind].resolve()
         try:
