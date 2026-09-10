@@ -3,10 +3,7 @@
 from datetime import date
 import html
 
-from timetable_snapshot_import import (
-    TimetableImportValidationError,
-    import_timetable_snapshot,
-)
+from timetable_snapshot_import import import_timetable_snapshot
 
 
 def render(qs: dict, message_html: str = "") -> str:
@@ -46,24 +43,25 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
     start_date = fields.get("effective_start_date", [date.today().isoformat()])[0]
     qs = {"effective_start_date": [start_date]}
 
-    try:
-        result = import_timetable_snapshot(
-            conn,
-            file_info["content"],
-            effective_start_date=start_date,
-        )
-    except TimetableImportValidationError as exc:
-        items = "".join(f"<li>{html.escape(error)}</li>" for error in exc.errors)
-        return (
-            '<div class="msg error">自動確定できない行があります。データは登録していません。</div>'
-            f'<ul class="error-list">{items}</ul>',
-            qs,
-        )
+    result = import_timetable_snapshot(
+        conn,
+        file_info["content"],
+        effective_start_date=start_date,
+    )
 
+    skipped_errors = result["skipped_errors"]
+    error_items = "".join(f"<li>{html.escape(error)}</li>" for error in skipped_errors)
+    error_summary = ""
+    if skipped_errors:
+        error_summary = (
+            f'<div class="msg error">{len(skipped_errors)}件はエラーのためスキップしました。</div>'
+            f'<ul class="error-list">{error_items}</ul>'
+        )
     message = (
         '<div class="msg success">取り込みが完了しました '
         f'（生徒の新規登録: {result["new_students"]}名、'
         f'通常授業の登録: {result["new_enrollments"]}件、'
         f'登録済みのためスキップ: {result["skipped_enrollments"]}件）</div>'
+        f'{error_summary}'
     )
     return message, qs

@@ -127,7 +127,7 @@ def _grade_to_code(grade: int) -> str:
     return ""
 
 
-def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> list[dict]:
+def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> tuple[list[dict], list[str]]:
     errors: list[str] = []
     resolved: list[dict] = []
     active_instructors = {
@@ -141,6 +141,7 @@ def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> list[dict]
 
     for record in parsed:
         location = f"{record['weekday']}曜 {record['period']}限 {record['cell']}"
+        row_errors: list[str] = []
         try:
             student = parse_student_text(record["student_text"])
         except ValueError as exc:
@@ -150,13 +151,13 @@ def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> list[dict]
         short_name = record["instructor_short_name"]
         instructor_id = active_instructors.get(short_name)
         if not short_name:
-            errors.append(f"{location}: 教員略称が空です")
+            row_errors.append("教員略称が空です")
         elif instructor_id is None:
-            errors.append(f"{location}: 教員略称『{short_name}』は講師マスタと完全一致しません")
+            row_errors.append(f"教員略称『{short_name}』は講師マスタと完全一致しません")
 
         subject_text = record["subject_text"]
         if not subject_text:
-            errors.append(f"{location}: 科目が空です")
+            row_errors.append("科目が空です")
             subject_id = None
         else:
             subject_result = resolve_subject(conn, subject_text, student["base_grade"], None)
@@ -164,13 +165,14 @@ def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> list[dict]
                 subject_id = subject_result["candidates"][0]["id"]
             elif subject_result["status"] == "ambiguous":
                 labels = "、".join(candidate["label"] for candidate in subject_result["candidates"])
-                errors.append(f"{location}: 科目『{subject_text}』を一意に決められません（候補: {labels}）")
+                row_errors.append(f"科目『{subject_text}』を一意に決められません（候補: {labels}）")
                 subject_id = None
             else:
-                errors.append(f"{location}: 科目『{subject_text}』は科目マスタと一致しません")
+                row_errors.append(f"科目『{subject_text}』は科目マスタと一致しません")
                 subject_id = None
 
-        if instructor_id is None or subject_id is None:
+        if row_errors:
+            errors.append(f"{location}: {'／'.join(row_errors)}")
             continue
         key = (student["grade_code"], student["name"], record["weekday"], record["period"])
         assignment = (instructor_id, subject_id)
@@ -180,9 +182,7 @@ def _resolve_records(conn: sqlite3.Connection, parsed: list[dict]) -> list[dict]
         occupied[key] = assignment
         resolved.append({**record, **student, "instructor_id": instructor_id, "subject_id": subject_id})
 
-    if errors:
-        raise TimetableImportValidationError(errors)
-    return resolved
+    return resolved, errors
 
 
 def import_timetable_snapshot(
@@ -190,8 +190,8 @@ def import_timetable_snapshot(
     source,
     *,
     effective_start_date: str | None = None,
-) -> dict[str, int]:
-    """全セルを検証後、生徒と通常授業を同一トランザクションで反映する。"""
+) -> dict[str, object]:
+    """正常な行を一括反映し、自動確定できない行は理由付きで除外する。"""
     start_date = effective_start_date or date.today().isoformat()
     try:
         date.fromisoformat(start_date)
@@ -201,7 +201,7 @@ def import_timetable_snapshot(
     parsed = parse_timetable_snapshot(source)
     if not parsed:
         raise TimetableImportValidationError(["取り込み対象の授業が1件も見つかりません"])
-    resolved = _resolve_records(conn, parsed)
+    resolved, skipped_errors = _resolve_records(conn, parsed)
     current_fy = get_current_academic_fiscal_year(date.fromisoformat(start_date))
     existing_students: dict[tuple[str, str], int] = {}
     for row in conn.execute(
@@ -237,9 +237,10 @@ def import_timetable_snapshot(
                 """SELECT 1 FROM REGULAR_COURSE_ENROLLMENTS
                    WHERE student_id=? AND subject_id=? AND instructor_id=?
                      AND day_of_week=? AND period_number=?
-                     AND effective_start_date=? AND effective_end_date IS NULL""",
+                     AND effective_start_date <= ?
+                     AND (effective_end_date IS NULL OR effective_end_date > ?)""",
                 (student_id, record["subject_id"], record["instructor_id"],
-                 record["weekday"], record["period"], start_date),
+                 record["weekday"], record["period"], start_date, start_date),
             ).fetchone()
             if exact:
                 skipped_enrollments += 1
@@ -248,13 +249,15 @@ def import_timetable_snapshot(
                 """SELECT 1 FROM REGULAR_COURSE_ENROLLMENTS
                    WHERE student_id=? AND day_of_week=? AND period_number=?
                      AND effective_start_date <= ?
-                     AND (effective_end_date IS NULL OR effective_end_date >= ?)""",
+                     AND (effective_end_date IS NULL OR effective_end_date > ?)""",
                 (student_id, record["weekday"], record["period"], start_date, start_date),
             ).fetchone()
             if conflict:
-                raise TimetableImportValidationError([
-                    f"{record['weekday']}曜 {record['period']}限: {record['name']}には既存の有効な通常授業があります"
-                ])
+                skipped_errors.append(
+                    f"{record['weekday']}曜 {record['period']}限 {record['cell']}: "
+                    f"{record['name']}には既存の有効な通常授業があるためスキップしました"
+                )
+                continue
             conn.execute(
                 """INSERT INTO REGULAR_COURSE_ENROLLMENTS
                    (student_id,subject_id,instructor_id,day_of_week,period_number,
@@ -270,6 +273,7 @@ def import_timetable_snapshot(
             "new_students": new_students,
             "new_enrollments": new_enrollments,
             "skipped_enrollments": skipped_enrollments,
+            "skipped_errors": skipped_errors,
         }
     except Exception:
         conn.execute("ROLLBACK TO SAVEPOINT timetable_snapshot_import")

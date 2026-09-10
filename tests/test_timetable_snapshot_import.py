@@ -24,7 +24,7 @@ def build_timetable(*, invalid=False, unknown_instructor=False) -> bytes:
     sheet["E3"] = "x2 川口" if invalid else "c2 川口"
     sheet["F3"] = "数学"
     # 同じ1限の講師セルが結合相当で空欄でも、直前の略称を引き継ぐ。
-    sheet["H3"] = "不明2" if unknown_instructor else "佐"
+    sheet["H3"] = "佐"
     sheet["I3"] = "高卒 山田"
     sheet["J3"] = "英語"
     sheet["I4"] = "c2 川口"
@@ -93,6 +93,7 @@ class TimetableSnapshotImportTests(unittest.TestCase):
             "new_students": 2,
             "new_enrollments": 3,
             "skipped_enrollments": 0,
+            "skipped_errors": [],
         })
         students = self.conn.execute(
             "SELECT last_name,first_name,last_name_kana,first_name_kana,base_grade FROM STUDENTS ORDER BY student_id"
@@ -143,19 +144,58 @@ class TimetableSnapshotImportTests(unittest.TestCase):
         with self.assertRaisesRegex(TimetableImportValidationError, "1件も見つかりません"):
             import_timetable_snapshot(self.conn, output.getvalue())
 
-    def test_invalid_grade_or_instructor_aborts_all_writes(self):
-        with self.assertRaises(TimetableImportValidationError) as caught:
-            import_timetable_snapshot(
-                self.conn,
-                build_timetable(invalid=True, unknown_instructor=True),
-                effective_start_date="2026-04-01",
-            )
-        self.assertIn("判定できません", str(caught.exception))
-        self.assertIn("完全一致しません", str(caught.exception))
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM STUDENTS").fetchone()[0], 0)
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM REGULAR_COURSE_ENROLLMENTS").fetchone()[0], 0
+    def test_invalid_grade_row_is_skipped_but_valid_rows_are_written(self):
+        result = import_timetable_snapshot(
+            self.conn,
+            build_timetable(invalid=True),
+            effective_start_date="2026-04-01",
         )
+        self.assertEqual(result["new_students"], 2)
+        self.assertEqual(result["new_enrollments"], 2)
+        self.assertEqual(len(result["skipped_errors"]), 1)
+        self.assertIn("判定できません", result["skipped_errors"][0])
+        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM STUDENTS").fetchone()[0], 2)
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM REGULAR_COURSE_ENROLLMENTS").fetchone()[0], 2
+        )
+
+    def test_unmatched_instructor_row_is_skipped_but_valid_rows_are_written(self):
+        result = import_timetable_snapshot(
+            self.conn,
+            build_timetable(unknown_instructor=True),
+            effective_start_date="2026-04-01",
+        )
+        self.assertEqual(result["new_enrollments"], 2)
+        self.assertEqual(len(result["skipped_errors"]), 1)
+        self.assertIn("完全一致しません", result["skipped_errors"][0])
+
+    def test_existing_schedule_conflict_skips_only_that_row(self):
+        student_id = self.conn.execute(
+            """INSERT INTO STUDENTS
+               (last_name,first_name,last_name_kana,first_name_kana,
+                enrollment_year,base_grade,enrollment_status)
+               VALUES ('川口','','かわぐち','',2026,8,'在籍')"""
+        ).lastrowid
+        instructor_id = self.conn.execute(
+            "SELECT instructor_id FROM INSTRUCTORS WHERE short_name='佐'"
+        ).fetchone()[0]
+        subject_id = self.conn.execute(
+            "SELECT subject_id FROM SUBJECTS WHERE grade_band='中学生' AND subject_name='英語'"
+        ).fetchone()[0]
+        self.conn.execute(
+            """INSERT INTO REGULAR_COURSE_ENROLLMENTS
+               (student_id,subject_id,instructor_id,day_of_week,period_number,effective_start_date)
+               VALUES (?,?,?,?,?,?)""",
+            (student_id, subject_id, instructor_id, "月", 1, "2026-03-01"),
+        )
+        self.conn.commit()
+
+        result = import_timetable_snapshot(
+            self.conn, build_timetable(), effective_start_date="2026-04-01"
+        )
+        self.assertEqual(result["new_enrollments"], 2)
+        self.assertEqual(len(result["skipped_errors"]), 1)
+        self.assertIn("既存の有効な通常授業", result["skipped_errors"][0])
 
     def test_graduate_grade_is_stable_and_displayed_as_graduate(self):
         self.assertEqual(get_grade_at_fiscal_year(2026, 13, 2031), 13)
@@ -179,6 +219,24 @@ class TimetableSnapshotImportTests(unittest.TestCase):
         self.assertIn("生徒の新規登録: 2名", message)
         self.assertIn("通常授業の登録: 3件", message)
         self.assertEqual(query, {"effective_start_date": ["2026-04-01"]})
+
+    def test_upload_handler_reports_registered_and_error_counts_together(self):
+        message, _ = page_excel_import.handle_post(
+            {
+                "action": ["import"],
+                "effective_start_date": ["2026-04-01"],
+                "_files": {
+                    "excel_file": {
+                        "filename": "info-copy.xlsx",
+                        "content": build_timetable(invalid=True),
+                    }
+                },
+            },
+            self.conn,
+        )
+        self.assertIn("通常授業の登録: 2件", message)
+        self.assertIn("1件はエラーのためスキップ", message)
+        self.assertIn("判定できません", message)
 
 
 if __name__ == "__main__":
