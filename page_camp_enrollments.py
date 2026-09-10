@@ -61,7 +61,7 @@ def insert_camp_enrollment(conn, camp_id, student_id, subject_id, contracted_cou
 
 
 def grade_band_for_grade(base_grade: int) -> str | None:
-    """base_grade(1〜12の整数)から、SUBJECTS.grade_bandに対応する区分を返す。"""
+    """base_grade(1〜13の整数)から、SUBJECTS.grade_bandに対応する区分を返す。"""
     if base_grade is None:
         return None
     if 1 <= base_grade <= 3:
@@ -70,7 +70,7 @@ def grade_band_for_grade(base_grade: int) -> str | None:
         return "小学生高学年"
     if 7 <= base_grade <= 9:
         return "中学生"
-    if 10 <= base_grade <= 12:
+    if 10 <= base_grade <= 13:
         return "高校生"
     return None
 

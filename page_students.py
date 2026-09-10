@@ -46,6 +46,7 @@ def _grade_options() -> str:
     labels = [
         (1, "小1"), (2, "小2"), (3, "小3"), (4, "小4"), (5, "小5"), (6, "小6"),
         (7, "中1"), (8, "中2"), (9, "中3"), (10, "高1"), (11, "高2"), (12, "高3"),
+        (13, "高卒生"),
     ]
     return "".join(f'<option value="{v}">{label}</option>' for v, label in labels)
 

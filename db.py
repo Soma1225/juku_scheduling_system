@@ -158,6 +158,9 @@ def get_grade_at_fiscal_year(
     academic_fiscal_year: int,
 ) -> int:
     """入塾年度・入塾時点の学年から、指定年度時点の学年を計算する。"""
+    # 13は「高卒生」の固定値。年度が変わっても進級させない。
+    if base_grade == 13:
+        return 13
     return base_grade + (academic_fiscal_year - enrollment_year)
 
 
@@ -176,7 +179,7 @@ def get_current_grade(enrollment_year: int, base_grade: int) -> int:
 
 def format_grade_label(base_grade: int | None) -> str:
     """
-    base_grade(1〜12の内部管理用の連番)を、日本の学校制度に沿った表示ラベルに変換する。
+    base_grade(1〜13の内部管理用の連番)を、日本の学校制度に沿った表示ラベルに変換する。
     例: 1→小1, 8→中2, 12→高3
     (「8年生」のような、日本の学校制度に存在しない表記を防ぐため)
     """
@@ -188,6 +191,8 @@ def format_grade_label(base_grade: int | None) -> str:
         return f"中{base_grade - 6}"
     if 10 <= base_grade <= 12:
         return f"高{base_grade - 9}"
+    if base_grade == 13:
+        return "高卒生"
     return str(base_grade)  # 想定外の値が入っていた場合のフォールバック
 
 

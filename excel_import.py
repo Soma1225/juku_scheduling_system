@@ -226,7 +226,7 @@ def _grade_band_of(base_grade: int) -> str | None:
         return "小学生高学年"
     if 7 <= base_grade <= 9:
         return "中学生"
-    if 10 <= base_grade <= 12:
+    if 10 <= base_grade <= 13:
         return "高校生"
     return None
 
