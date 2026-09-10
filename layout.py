@@ -23,6 +23,7 @@ MENU_GROUPS = [
     ]),
     ("講師情報", [
         ("/instructors", "講師登録"),
+        ("/instructor-import", "講師マスタ Excel取り込み"),
         ("/instructor-detail", "講師詳細"),
         ("/instructor-subjects", "講師 担当科目"),
         ("/instructor-availability", "講師 対応可能時間"),

@@ -10,6 +10,7 @@ import sqlite3
 from pathlib import Path
 
 from image_import_migrations import ensure_image_import_schema
+from core_migrations import ensure_core_schema
 
 DB_PATH = Path(__file__).parent / "juku_schedule.db"
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -84,6 +85,7 @@ def ensure_db_exists() -> None:
 
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
+    ensure_core_schema(conn)
     if conn.execute("SELECT COUNT(*) FROM PERIODS").fetchone()[0] == 0:
         conn.executemany(
             "INSERT INTO PERIODS (period_number, start_time, end_time) VALUES (?, ?, ?)",

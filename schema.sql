@@ -35,7 +35,8 @@ CREATE TABLE INSTRUCTORS (
     last_name_kana   TEXT NOT NULL,   -- 姓(ふりがな)
     first_name_kana  TEXT NOT NULL,   -- 名(ふりがな)
     external_instructor_id TEXT UNIQUE,  -- 会社全体の講師番号(教室単位では飛び飛び)。将来の外部ID連携用。今はNULL可
-    academic_year TEXT NOT NULL  -- 学年(講師は大学生が基本のため必須)。学部生B1〜B12、修士M1〜M4、博士D1〜D6
+    short_name TEXT UNIQUE,  -- 現行「時間割一覧」の教員略称との完全一致に使用
+    academic_year TEXT  -- スナップショット取込時は不明なためNULL可。手入力時は必須
         CHECK (academic_year IS NULL OR academic_year IN (
             'B1','B2','B3','B4','B5','B6','B7','B8','B9','B10','B11','B12',
             'M1','M2','M3','M4',
