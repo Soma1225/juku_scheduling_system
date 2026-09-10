@@ -202,7 +202,10 @@ class TimetableSnapshotImportTests(unittest.TestCase):
         self.assertEqual(format_grade_label(13), "高卒生")
 
     def test_page_and_menu_use_new_import_purpose(self):
-        self.assertIn("生徒・通常授業 Excel取り込み", page_excel_import.render({}))
+        rendered = page_excel_import.render({})
+        self.assertIn("生徒・通常授業 Excel取り込み", rendered)
+        self.assertIn("他の行は登録されます", rendered)
+        self.assertNotIn("データは登録せず", rendered)
         self.assertIn("生徒・通常授業 Excel取り込み", repr(layout.MENU_GROUPS))
 
     def test_upload_handler_reports_result_counts(self):
