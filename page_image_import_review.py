@@ -49,7 +49,21 @@ def render(qs: dict, message_html: str = "") -> str:
         "SELECT student_id,last_name||first_name FROM STUDENTS WHERE enrollment_status='在籍' "
         "ORDER BY last_name_kana,first_name_kana,student_id"
     ).fetchall()
-    import_plan = build_import_plan(conn, batch_id=batch_id)
+    selected_term_id = None
+    terms = []
+    if batch and batch[5] is None:
+        terms = conn.execute(
+            "SELECT term_id,term_name,start_date,end_date FROM TERMS ORDER BY start_date DESC"
+        ).fetchall()
+        try:
+            selected_term_id = int(qs.get("term_id", [""])[0])
+        except (TypeError, ValueError):
+            current = conn.execute(
+                "SELECT term_id FROM TERMS WHERE date('now','localtime') BETWEEN start_date AND end_date "
+                "ORDER BY start_date DESC LIMIT 1"
+            ).fetchone()
+            selected_term_id = current[0] if current else (terms[0][0] if terms else None)
+    import_plan = build_import_plan(conn, batch_id=batch_id, term_id=selected_term_id)
     candidate_map = {}
     count_map = {}
     subject_map = {}
@@ -430,12 +444,24 @@ def render(qs: dict, message_html: str = "") -> str:
     if batch[4] == "IMPORTED":
         import_panel = '<div class="msg success">このバッチは本登録済みです。</div>'
     elif import_plan.can_import:
+        term_select_html = ""
+        if import_plan.is_regular:
+            term_options = '<option value="">学期を選択してください</option>' + "".join(
+                f'<option value="{term[0]}"{" selected" if term[0] == selected_term_id else ""}>'
+                f'{html.escape(term[1])}（{term[2]}〜{term[3]}）</option>'
+                for term in terms
+            )
+            term_select_html = (
+                '<label>本登録先の学期 <span class="req">*</span></label>'
+                f'<select name="term_id" required>{term_options}</select>'
+            )
         import_panel = f"""
         <div class="msg success">本登録可能です。受講科目: 新規{len(import_plan.enrollment_inserts)}件・更新{len(import_plan.enrollment_updates)}件、
         対応可能時間: 新規{len(import_plan.availability_inserts)}件・更新{len(import_plan.availability_updates)}件</div>
         <form method="POST" action="/image-import-review" class="operator-required-form">
           <input type="hidden" name="action" value="import_batch">
           <input type="hidden" name="batch_id" value="{batch_id}">
+          {term_select_html}
           <label>本登録を実行する担当者 <span class="req">*</span></label>
           <select name="operator_instructor_id" class="remembered-operator" required>{global_operator_options}</select>
           <div class="operator-warning" style="font-size:12px;color:#993C1D;margin-top:5px;">担当者を選択しないと本登録できません</div>
@@ -483,8 +509,13 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
     except (TypeError, ValueError):
         raise ValueError("対象項目と担当者を選択してください")
     if action == "import_batch":
+        try:
+            term_id = int(get("term_id")) if get("term_id") else None
+        except (TypeError, ValueError):
+            raise ValueError("本登録先の学期を選択してください")
         plan, backup_path = execute_import_batch(
             conn, batch_id=batch_id, operator_instructor_id=operator_id,
+            term_id=term_id,
             backup_dir=load_backup_directory(DEFAULT_BACKUP_DIR),
         )
         changed = (

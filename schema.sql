@@ -169,6 +169,21 @@ CREATE TABLE ASSIGNMENTS (
 -- 5. 通常授業契約・進級ルール
 -- ---------------------------------------------------------
 
+-- 通常授業の自動組み前の希望（科目・週あたり回数）。
+CREATE TABLE REGULAR_COURSE_REQUESTS (
+    request_id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id              INTEGER NOT NULL REFERENCES STUDENTS(student_id),
+    term_id                 INTEGER NOT NULL REFERENCES TERMS(term_id),
+    subject_id              INTEGER NOT NULL REFERENCES SUBJECTS(subject_id),
+    desired_count_per_week  INTEGER NOT NULL CHECK (desired_count_per_week BETWEEN 1 AND 5),
+    format                  TEXT NOT NULL DEFAULT '1:2'
+        CHECK (format IN ('1:1', '1:2')),
+    assigned_instructor_id  INTEGER REFERENCES INSTRUCTORS(instructor_id),
+    status                  TEXT NOT NULL DEFAULT 'PENDING'
+        CHECK (status IN ('PENDING', 'SCHEDULED', 'CANCELLED')),
+    UNIQUE (student_id, term_id, subject_id)
+);
+
 CREATE TABLE REGULAR_COURSE_ENROLLMENTS (
     enrollment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id            INTEGER NOT NULL REFERENCES STUDENTS(student_id),
@@ -290,4 +305,6 @@ CREATE INDEX idx_sessions_slot ON SESSIONS(slot_id);
 CREATE INDEX idx_assignments_student ON ASSIGNMENTS(student_id);
 CREATE INDEX idx_reg_enroll_student_active ON REGULAR_COURSE_ENROLLMENTS(student_id, effective_end_date);
 CREATE INDEX idx_reg_enroll_instructor_active ON REGULAR_COURSE_ENROLLMENTS(instructor_id, effective_end_date);
+CREATE INDEX idx_regular_course_requests_term_status ON REGULAR_COURSE_REQUESTS(term_id, status);
+CREATE INDEX idx_regular_course_requests_student ON REGULAR_COURSE_REQUESTS(student_id, term_id);
 CREATE INDEX idx_attendance_date ON ATTENDANCE_RECORDS(session_date);
