@@ -5,10 +5,28 @@ from pathlib import Path
 
 MIGRATION_ID = "003_instructor_snapshot_import"
 MIGRATION_PATH = Path(__file__).with_name("migrations") / f"{MIGRATION_ID}.sql"
+CLOSURE_MIGRATION_ID = "005_closure_dates"
+CLOSURE_MIGRATION_PATH = Path(__file__).with_name("migrations") / f"{CLOSURE_MIGRATION_ID}.sql"
 
 
 def _instructor_columns(conn) -> dict[str, tuple]:
     return {row[1]: row for row in conn.execute("PRAGMA table_info(INSTRUCTORS)").fetchall()}
+
+
+def _ensure_closure_dates(conn) -> bool:
+    applied = conn.execute(
+        "SELECT 1 FROM APP_SCHEMA_MIGRATIONS WHERE migration_id=?", (CLOSURE_MIGRATION_ID,)
+    ).fetchone()
+    if applied:
+        return False
+    conn.executescript(
+        "BEGIN IMMEDIATE;\n"
+        + CLOSURE_MIGRATION_PATH.read_text(encoding="utf-8")
+        + "\nINSERT INTO APP_SCHEMA_MIGRATIONS (migration_id, applied_at) "
+          f"VALUES ('{CLOSURE_MIGRATION_ID}', strftime('%Y-%m-%dT%H:%M:%fZ','now'));\n"
+          "COMMIT;"
+    )
+    return True
 
 
 def ensure_core_schema(conn) -> bool:
@@ -19,11 +37,12 @@ def ensure_core_schema(conn) -> bool:
                applied_at TEXT NOT NULL
            )"""
     )
+    closure_applied = _ensure_closure_dates(conn)
     applied = conn.execute(
         "SELECT 1 FROM APP_SCHEMA_MIGRATIONS WHERE migration_id = ?", (MIGRATION_ID,)
     ).fetchone()
     if applied:
-        return False
+        return closure_applied
 
     columns = _instructor_columns(conn)
     if not columns:

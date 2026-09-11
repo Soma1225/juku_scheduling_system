@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS CLOSURE_DATES (
+    closure_date TEXT PRIMARY KEY,
+    closure_name TEXT NOT NULL
+);

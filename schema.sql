@@ -83,6 +83,12 @@ CREATE TABLE TERMS (
     end_date   TEXT NOT NULL
 );
 
+-- 通常授業・講習会をまたいで共通利用する休校日。
+CREATE TABLE CLOSURE_DATES (
+    closure_date TEXT PRIMARY KEY,
+    closure_name TEXT NOT NULL
+);
+
 -- ---------------------------------------------------------
 -- 3. 対応可能時間
 -- ---------------------------------------------------------

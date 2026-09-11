@@ -54,11 +54,20 @@ import page_image_import_review
 import page_image_import_corrections
 import page_student_instructor_preferences
 import page_instructor_detail
+import page_weekly_schedule_export
+import page_closure_dates
 from image_import_service import DEFAULT_STORAGE_ROOT
 from camp_schedule_excel_export import (
     CampScheduleCapacityError,
     CampScheduleExportError,
     export_camp_schedule_xlsx,
+)
+from weekly_schedule_excel_export import (
+    WeeklyScheduleCapacityError,
+    WeeklyScheduleExportError,
+    export_classroom_weekly_xlsx,
+    export_instructor_weekly_xlsx,
+    export_student_weekly_xlsx,
 )
 
 PORT = 8000
@@ -97,6 +106,8 @@ ROUTES = {
         page_student_instructor_preferences.handle_post,
     ),
     "/instructor-detail": (page_instructor_detail.render, None),
+    "/weekly-schedule-export": (page_weekly_schedule_export.render, None),
+    "/closure-dates": (page_closure_dates.render, page_closure_dates.handle_post),
 }
 
 
@@ -162,6 +173,9 @@ class PortalHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/camp-schedule-export":
             self._serve_camp_schedule_export(parse_qs(parsed.query))
+            return
+        if path == "/weekly-schedule-export-download":
+            self._serve_weekly_schedule_export(parse_qs(parsed.query))
             return
         if path == "/image-import-preview":
             self._serve_image_import_preview(parse_qs(parsed.query))
@@ -240,6 +254,56 @@ class PortalHandler(BaseHTTPRequestHandler):
                 '<h1>講習会時間割 Excel出力</h1>'
                 f'<div class="msg error">Excelを出力できません。<ul>{issue_html}</ul></div>'
                 f'<a href="/run-scheduler?camp_id={camp_id}">スケジューリング画面へ戻る</a>',
+            )
+            self.send_response(422)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        finally:
+            conn.close()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_weekly_schedule_export(self, qs: dict):
+        """通常授業・教科フォローの週間時間割Excelを直接ダウンロードさせる。"""
+        kind = qs.get("kind", [""])[0]
+        conn = get_conn()
+        try:
+            if kind == "student":
+                body, filename = export_student_weekly_xlsx(
+                    conn,
+                    int(qs.get("student_id", [""])[0]),
+                    qs.get("start_date", [""])[0],
+                    qs.get("end_date", [""])[0],
+                )
+            elif kind == "instructor":
+                body, filename = export_instructor_weekly_xlsx(
+                    conn, int(qs.get("instructor_id", [""])[0])
+                )
+            elif kind == "classroom":
+                body, filename = export_classroom_weekly_xlsx(conn)
+            else:
+                self.send_error(400, "invalid export kind")
+                return
+        except (TypeError, ValueError) as exc:
+            if not isinstance(exc, (WeeklyScheduleCapacityError, WeeklyScheduleExportError)):
+                self.send_error(400, "invalid export target")
+                return
+            issues = getattr(exc, "errors", [str(exc)])
+            issue_html = "".join(f"<li>{html_module.escape(issue)}</li>" for issue in issues)
+            content = render_page(
+                "/weekly-schedule-export",
+                '<h1>通常授業 週間Excel出力</h1>'
+                f'<div class="msg error">Excelを出力できません。<ul>{issue_html}</ul></div>'
+                '<a href="/weekly-schedule-export">出力画面へ戻る</a>',
             )
             self.send_response(422)
             self.send_header("Content-Type", "text/html; charset=utf-8")
