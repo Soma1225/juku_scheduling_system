@@ -7,6 +7,7 @@ MIGRATION_DIR = Path(__file__).with_name("migrations")
 MIGRATIONS = (
     ("001_image_import_v6", MIGRATION_DIR / "001_image_import_v6.sql"),
     ("002_student_instructor_preferences", MIGRATION_DIR / "002_student_instructor_preferences.sql"),
+    ("004_regular_course_requests", MIGRATION_DIR / "004_regular_course_requests.sql"),
 )
 
 
