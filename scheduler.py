@@ -272,6 +272,7 @@ PAIRING_BONUS = 10_000  # 1つの枠に2人まとまった(1:2の稼働率が高
 WEEKDAY_GAP_WEIGHT = 20     # 曜日のズレ(7の倍数からの差)^2 にかける重み
 INTERVAL_GAP_WEIGHT = 1     # 理想間隔からの単純な日数差にかける重み
 CLUSTER_PENALTY = 250       # 同日・隣接日(1日以内)に2コマ入ったときの追加ペナルティ(曜日ズレの最大値より確実に重くする)
+INTRA_DAY_GAP_PENALTY = 100  # 同じ日の最初と最後の授業の間にある空きコマ1つあたりのペナルティ
 CLUSTER_THRESHOLD_DAYS = 1  # これ以下の日数差は「詰め込みすぎ」とみなす
 SPACING_PAIR_WINDOW_MULTIPLIER = 3  # 理想間隔の何倍まで離れたペア間の評価を計算するか(遠すぎるペアは無視)
 SYNC_MISMATCH_PENALTY = 5_000  # 兄弟同時受講グループが同じ日に別の限になった場合のペナルティ(ほぼ絶対条件として扱うため非常に重くする)
@@ -297,6 +298,75 @@ def _spacing_penalty(gap_days: int) -> int:
     weekday_gap = gap_days % 7
     weekday_gap = min(weekday_gap, 7 - weekday_gap)  # 0(同じ曜日)〜3(最大ズレ)
     return (weekday_gap ** 2) * WEEKDAY_GAP_WEIGHT + gap_days * INTERVAL_GAP_WEIGHT
+
+
+def _new_any_selected_var(model, variables: list, name: str):
+    """variables のいずれかが1なら1になる真偽変数を返す。"""
+    if len(variables) == 1:
+        return variables[0]
+    selected = model.NewBoolVar(name)
+    expression = sum(variables)
+    model.Add(selected <= expression)
+    model.Add(expression <= len(variables) * selected)
+    return selected
+
+
+def _add_intra_day_gap_penalties(
+    model,
+    person_kind: str,
+    person_date_period_vars: dict[int, dict[str, dict[int, list]]],
+) -> list:
+    """人ごと・日付ごとの空きコマを表す真偽変数をモデルへ追加する。
+
+    最初と最後に使われる限の間で、当該限が未使用の場合だけ ``gap`` が1になる。
+    候補変数が存在しない限も、前後に授業があれば空きコマとして数える。
+    """
+    gap_vars = []
+    for person_id, date_map in person_date_period_vars.items():
+        for session_date, period_map in date_map.items():
+            if len(period_map) < 2:
+                continue
+
+            used_by_period = {
+                period: _new_any_selected_var(
+                    model,
+                    variables,
+                    f"{person_kind}_used_{person_id}_{session_date}_p{period}",
+                )
+                for period, variables in period_map.items()
+            }
+            first_candidate = min(used_by_period)
+            last_candidate = max(used_by_period)
+
+            for period in range(first_candidate + 1, last_candidate):
+                before = [used for p, used in used_by_period.items() if p < period]
+                after = [used for p, used in used_by_period.items() if p > period]
+                if not before or not after:
+                    continue
+
+                has_before = _new_any_selected_var(
+                    model,
+                    before,
+                    f"{person_kind}_before_{person_id}_{session_date}_p{period}",
+                )
+                has_after = _new_any_selected_var(
+                    model,
+                    after,
+                    f"{person_kind}_after_{person_id}_{session_date}_p{period}",
+                )
+                current = used_by_period.get(period)
+                gap = model.NewBoolVar(
+                    f"{person_kind}_gap_{person_id}_{session_date}_p{period}"
+                )
+                model.Add(gap <= has_before)
+                model.Add(gap <= has_after)
+                if current is None:
+                    model.Add(gap >= has_before + has_after - 1)
+                else:
+                    model.Add(gap + current <= 1)
+                    model.Add(gap >= has_before + has_after - current - 1)
+                gap_vars.append(gap)
+    return gap_vars
 
 
 def is_regular_continuation_subject(
@@ -404,6 +474,7 @@ def _solve_camp_core_once(
     student_date_vars: dict[int, dict[str, list]] = {}  # 1日の上限コマ数チェック用(全科目合算)
     slot_date_cache: dict[int, int] = {}
     slot_date_str_cache: dict[int, str] = {}
+    slot_period_cache: dict[int, int] = {}
     enrollment_rank_of: dict[int, dict[int, int]] = {}  # 候補講師リストの順位(2回計算しないためのキャッシュ)
 
     for enrollment_id, student_id, contracted_count, format_ in enrollments:
@@ -429,9 +500,12 @@ def _solve_camp_core_once(
                 _date_to_ordinal(conn, slot_id, slot_date_cache)  # キャッシュに乗せておく
 
                 if slot_id not in slot_date_str_cache:
-                    slot_date_str_cache[slot_id] = conn.execute(
-                        "SELECT session_date FROM TIME_SLOTS WHERE slot_id = ?", (slot_id,)
-                    ).fetchone()[0]
+                    slot_row = conn.execute(
+                        "SELECT session_date, period_number FROM TIME_SLOTS WHERE slot_id = ?",
+                        (slot_id,),
+                    ).fetchone()
+                    slot_date_str_cache[slot_id] = slot_row[0]
+                    slot_period_cache[slot_id] = slot_row[1]
                 session_date = slot_date_str_cache[slot_id]
 
                 session_members.setdefault((instructor_id, slot_id), []).append((enrollment_id, format_))
@@ -546,7 +620,31 @@ def _solve_camp_core_once(
                     model.AddMultiplicationEquality(both_selected, [has_date_vars[date_a], has_date_vars[date_b]])
                     penalty_terms.append(both_selected * penalty)
 
-    # --- 目的関数の材料3: 兄弟等 同時受講グループのペナルティ(Step3c) ---
+    # --- 目的関数の材料3: 生徒・講師の同日内の空きコマを避ける ---
+    student_gap_inputs: dict[int, dict[str, dict[int, list]]] = {}
+    for student_id, slot_map in student_slot_vars.items():
+        for slot_id, variables in slot_map.items():
+            session_date = slot_date_str_cache[slot_id]
+            period_number = slot_period_cache[slot_id]
+            student_gap_inputs.setdefault(student_id, {}).setdefault(
+                session_date, {}
+            ).setdefault(period_number, []).extend(variables)
+
+    instructor_gap_inputs: dict[int, dict[str, dict[int, list]]] = {}
+    for (instructor_id, slot_id), members in session_members.items():
+        variables = [x[eid][(instructor_id, slot_id)] for eid, _format in members]
+        session_date = slot_date_str_cache[slot_id]
+        period_number = slot_period_cache[slot_id]
+        instructor_gap_inputs.setdefault(instructor_id, {}).setdefault(
+            session_date, {}
+        ).setdefault(period_number, []).extend(variables)
+
+    for gap_var in _add_intra_day_gap_penalties(model, "student", student_gap_inputs):
+        penalty_terms.append(gap_var * INTRA_DAY_GAP_PENALTY)
+    for gap_var in _add_intra_day_gap_penalties(model, "instructor", instructor_gap_inputs):
+        penalty_terms.append(gap_var * INTRA_DAY_GAP_PENALTY)
+
+    # --- 目的関数の材料4: 兄弟等 同時受講グループのペナルティ(Step3c) ---
     # 生徒×日付×限ごとの「出席している(その枠に割り当てがある)」を表す式を組み立てる。
     # 1つの(生徒,slot_id)には制約2により高々1つの変数しか1にならないため、
     # sum(vars)がそのまま0/1の"出席フラグ"として扱える(専用の変数を新設する必要がない)。
@@ -554,9 +652,7 @@ def _solve_camp_core_once(
     for student_id, slot_map in student_slot_vars.items():
         for slot_id, vars_here in slot_map.items():
             session_date = slot_date_str_cache[slot_id]
-            period_number = conn.execute(
-                "SELECT period_number FROM TIME_SLOTS WHERE slot_id = ?", (slot_id,)
-            ).fetchone()[0]
+            period_number = slot_period_cache[slot_id]
             key = (session_date, period_number)
             expr = sum(vars_here)
             student_date_period_expr.setdefault(student_id, {})[key] = expr
