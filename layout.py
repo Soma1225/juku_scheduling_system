@@ -29,6 +29,7 @@ MENU_GROUPS = [
         ("/instructor-import", "講師マスタ Excel取り込み"),
         ("/instructor-detail", "講師詳細"),
         ("/instructor-subjects", "講師 担当科目"),
+        ("/instructor-search", "科目・レベルで講師検索"),
         ("/instructor-availability", "講師 対応可能時間"),
         ("/instructor-academic-year", "講師 学年更新の確認"),
         ("/schedule-instructor", "講師視点の時間割"),

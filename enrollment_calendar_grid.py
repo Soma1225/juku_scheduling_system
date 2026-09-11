@@ -45,44 +45,26 @@ def _active_condition(alias: str = "e") -> str:
     )
 
 
-def evaluate_enrollment_slots(
+def get_instructor_slot_constraints(
     conn,
-    student_id: int,
     instructor_id: int,
-    effective_start_date: str,
+    as_of_date: str,
     makeup_date: str | None = None,
-) -> tuple[int, str, dict[tuple[str, int], SlotDecision]]:
-    """両契約テーブルと、必要なら特定日の振替も横断して判定する。"""
-    term_id, term_name = resolve_term_for_date(conn, effective_start_date)
+) -> tuple[int, str, str, dict[tuple[str, int], int], set[tuple[str, int]]]:
+    """講師の契約数と対応不可枠を返す。登録グリッド・講師検索で共用する。"""
+    term_id, term_name = resolve_term_for_date(conn, as_of_date)
 
-    student_occupied: set[tuple[str, int]] = set()
     instructor_counts: dict[tuple[str, int], int] = {}
     for table in ENROLLMENT_TABLES:
-        for day_of_week, period_number in conn.execute(
-            f"""SELECT day_of_week,period_number FROM {table} e
-                WHERE student_id=? AND {_active_condition()}""",
-            (student_id, effective_start_date, effective_start_date),
-        ).fetchall():
-            student_occupied.add((day_of_week, int(period_number)))
-
         for day_of_week, period_number, count in conn.execute(
             f"""SELECT day_of_week,period_number,COUNT(*) FROM {table} e
                 WHERE instructor_id=? AND {_active_condition()}
                 GROUP BY day_of_week,period_number""",
-            (instructor_id, effective_start_date, effective_start_date),
+            (instructor_id, as_of_date, as_of_date),
         ).fetchall():
             key = (day_of_week, int(period_number))
             instructor_counts[key] = instructor_counts.get(key, 0) + int(count)
 
-    # この画面では、指示仕様どおり「行がある＝対応不可」として扱う。
-    student_unavailable = {
-        (day, int(period))
-        for day, period in conn.execute(
-            """SELECT day_of_week,period_number FROM STUDENT_WEEKLY_AVAILABILITY
-               WHERE student_id=? AND term_id=?""",
-            (student_id, term_id),
-        ).fetchall()
-    }
     instructor_unavailable = {
         (day, int(period))
         for day, period in conn.execute(
@@ -97,12 +79,56 @@ def evaluate_enrollment_slots(
     ).fetchone()
     instructor_name = instructor[0] if instructor else "選択した講師"
 
-    student_makeup_occupied: set[tuple[str, int]] = set()
     if makeup_date is not None:
         try:
             target = date.fromisoformat(makeup_date)
         except (TypeError, ValueError) as exc:
             raise ValueError("振替日は YYYY-MM-DD 形式で入力してください") from exc
+        makeup_day = DAYS[target.weekday()]
+        for period, count in conn.execute(
+            """SELECT period_number,COUNT(*) FROM MAKEUP_SESSIONS
+               WHERE instructor_id=? AND makeup_date=? GROUP BY period_number""",
+            (instructor_id, makeup_date),
+        ).fetchall():
+            key = (makeup_day, int(period))
+            instructor_counts[key] = instructor_counts.get(key, 0) + int(count)
+    return term_id, term_name, instructor_name, instructor_counts, instructor_unavailable
+
+
+def evaluate_enrollment_slots(
+    conn,
+    student_id: int,
+    instructor_id: int,
+    effective_start_date: str,
+    makeup_date: str | None = None,
+) -> tuple[int, str, dict[tuple[str, int], SlotDecision]]:
+    """両契約テーブルと、必要なら特定日の振替も横断して判定する。"""
+    (term_id, term_name, instructor_name, instructor_counts,
+     instructor_unavailable) = get_instructor_slot_constraints(
+        conn, instructor_id, effective_start_date, makeup_date
+    )
+
+    student_occupied: set[tuple[str, int]] = set()
+    for table in ENROLLMENT_TABLES:
+        for day_of_week, period_number in conn.execute(
+            f"""SELECT day_of_week,period_number FROM {table} e
+                WHERE student_id=? AND {_active_condition()}""",
+            (student_id, effective_start_date, effective_start_date),
+        ).fetchall():
+            student_occupied.add((day_of_week, int(period_number)))
+
+    # この画面では、指示仕様どおり「行がある＝対応不可」として扱う。
+    student_unavailable = {
+        (day, int(period))
+        for day, period in conn.execute(
+            """SELECT day_of_week,period_number FROM STUDENT_WEEKLY_AVAILABILITY
+               WHERE student_id=? AND term_id=?""",
+            (student_id, term_id),
+        ).fetchall()
+    }
+    student_makeup_occupied: set[tuple[str, int]] = set()
+    if makeup_date is not None:
+        target = date.fromisoformat(makeup_date)
         makeup_day = DAYS[target.weekday()]
         student_makeup_occupied = {
             (makeup_day, int(period))
@@ -113,13 +139,6 @@ def evaluate_enrollment_slots(
                 (student_id, makeup_date),
             ).fetchall()
         }
-        for period, count in conn.execute(
-            """SELECT period_number,COUNT(*) FROM MAKEUP_SESSIONS
-               WHERE instructor_id=? AND makeup_date=? GROUP BY period_number""",
-            (instructor_id, makeup_date),
-        ).fetchall():
-            key = (makeup_day, int(period))
-            instructor_counts[key] = instructor_counts.get(key, 0) + int(count)
 
     decisions: dict[tuple[str, int], SlotDecision] = {}
     for day in DAYS:
