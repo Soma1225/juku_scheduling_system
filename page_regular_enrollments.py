@@ -8,7 +8,14 @@ page_regular_enrollments.py
 """
 
 from datetime import date
+import html
+
 from db import get_conn
+from enrollment_calendar_grid import (
+    build_enrollment_calendar_grid,
+    evaluate_enrollment_slots,
+    validate_enrollment_slot,
+)
 from page_instructors import list_instructors
 from page_camp_enrollments import grade_band_for_grade
 
@@ -23,6 +30,11 @@ def insert_regular_enrollment(conn, student_id, subject_id, instructor_id, day_o
         date.fromisoformat(effective_start_date)
     except ValueError:
         raise ValueError("effective_start_date は YYYY-MM-DD 形式で入力してください")
+
+    validate_enrollment_slot(
+        conn, int(student_id), int(instructor_id), effective_start_date,
+        day_of_week, int(period_number),
+    )
 
     cur = conn.execute(
         """INSERT INTO REGULAR_COURSE_ENROLLMENTS
@@ -62,13 +74,14 @@ def list_active_enrollments_for_student(conn, student_id) -> list[dict]:
 
 def render(qs: dict, message_html: str = "") -> str:
     student_id = qs.get("student_id", [""])[0]
+    subject_id = qs.get("subject_id", [""])[0]
+    instructor_id = qs.get("instructor_id", [""])[0]
+    effective_start_date = qs.get("effective_start_date", [date.today().isoformat()])[0]
     conn = get_conn()
     students = conn.execute(
         "SELECT student_id, last_name || ' ' || first_name FROM STUDENTS ORDER BY last_name_kana, first_name_kana"
     ).fetchall()
     instructors = list_instructors(conn)
-    periods = conn.execute("SELECT period_number, start_time, end_time FROM PERIODS ORDER BY period_number").fetchall()
-
     grade_band = None
     subjects = []
     active_rows = []
@@ -82,23 +95,40 @@ def render(qs: dict, message_html: str = "") -> str:
                 (grade_band,),
             ).fetchall()
         active_rows = list_active_enrollments_for_student(conn, int(student_id))
-    conn.close()
-
     def options(rows, selected=""):
         return "".join(
-            f'<option value="{i}"{" selected" if str(i) == selected else ""}>{name}</option>' for i, name in rows
+            f'<option value="{html.escape(str(i))}"{" selected" if str(i) == selected else ""}>'
+            f'{html.escape(str(name))}</option>' for i, name in rows
         )
 
-    day_options = "".join(f'<option value="{d}">{d}</option>' for d in DAYS if d != "日")
-    period_options = "".join(
-        f'<option value="{p}">{p}限（{s}〜{e}）</option>' for p, s, e in periods
-    )
-
     subject_select = (
-        f'<select name="subject_id" required><option value="">選択してください</option>{options(subjects)}</select>'
+        f'<select name="subject_id" required onchange="this.form.submit()">'
+        f'<option value="">選択してください</option>{options(subjects, subject_id)}</select>'
         if grade_band else
         '<select disabled><option>先に生徒を選択してください</option></select>'
     )
+
+    grid_html = ""
+    if student_id and subject_id and instructor_id and effective_start_date:
+        try:
+            _term_id, term_name, decisions = evaluate_enrollment_slots(
+                conn, int(student_id), int(instructor_id), effective_start_date
+            )
+            grid_html = (
+                f'<div class="hint">対象学期：{html.escape(term_name)}。登録可能な枠だけ押せます。</div>'
+                + build_enrollment_calendar_grid(
+                    action_path="/regular-enrollments",
+                    student_id=int(student_id),
+                    subject_id=int(subject_id),
+                    instructor_id=int(instructor_id),
+                    effective_start_date=effective_start_date,
+                    decisions=decisions,
+                )
+            )
+        except ValueError as exc:
+            grid_html = f'<div class="msg error">{html.escape(str(exc))}</div>'
+    elif student_id:
+        grid_html = '<div class="hint">科目・講師・契約開始日を選ぶと、登録可能な枠を表示します。</div>'
 
     active_table = ""
     if student_id:
@@ -113,6 +143,9 @@ def render(qs: dict, message_html: str = "") -> str:
                       <form class="row-form" method="POST" action="/regular-enrollments">
                         <input type="hidden" name="action" value="end">
                         <input type="hidden" name="student_id" value="{student_id}">
+                        <input type="hidden" name="subject_id" value="{html.escape(subject_id)}">
+                        <input type="hidden" name="instructor_id" value="{html.escape(instructor_id)}">
+                        <input type="hidden" name="effective_start_date" value="{html.escape(effective_start_date)}">
                         <input type="hidden" name="enrollment_id" value="{r['enrollment_id']}">
                         <button class="btn-remove" type="submit">終了する</button>
                       </form>
@@ -127,33 +160,32 @@ def render(qs: dict, message_html: str = "") -> str:
         <table><tr><th>科目</th><th>講師</th><th>曜日・限</th><th>開始日</th><th></th></tr>{rows_html}</table>
         """
 
-    form_html = f"""
-    <form method="POST" action="/regular-enrollments">
-      <input type="hidden" name="action" value="add">
-      <input type="hidden" name="student_id" value="{student_id}">
+    selection_html = f"""
+    <form id="regular-selection" method="GET" action="/regular-enrollments">
+      <label>生徒 <span class="req">*</span></label>
+      <select name="student_id" required onchange="this.form.submit()">
+        <option value="">選択してください</option>{options(students, student_id)}
+      </select>
       <label>科目 <span class="req">*</span></label>
       {subject_select}
       <label>担当講師 <span class="req">*</span></label>
-      <select name="instructor_id" required><option value="">選択してください</option>{options(instructors)}</select>
-      <label>曜日 <span class="req">*</span></label>
-      <select name="day_of_week" required>{day_options}</select>
-      <label>限 <span class="req">*</span></label>
-      <select name="period_number" required>{period_options}</select>
+      <select name="instructor_id" required onchange="this.form.submit()">
+        <option value="">選択してください</option>{options(instructors, instructor_id)}
+      </select>
       <label>契約開始日 <span class="req">*</span></label>
-      <input type="date" name="effective_start_date" required>
-      <button type="submit">登録する</button>
+      <input type="date" name="effective_start_date" value="{html.escape(effective_start_date)}"
+             required onchange="this.form.submit()">
     </form>
+    {grid_html}
     """
+
+    conn.close()
 
     return f"""
     <h1>通常授業 契約登録</h1>
-    <div class="hint">曜日・限固定の通常授業契約。終了した契約は削除せず「終了する」で日付を記録します</div>
+    <div class="hint">生徒・科目・講師・開始日を選び、押せる曜日・限だけを登録できます。</div>
     {message_html}
-    <label>生徒</label>
-    <select onchange="location.href='/regular-enrollments?student_id='+this.value">
-      <option value="">選択してください</option>{options(students, student_id)}
-    </select>
-    {form_html if student_id else '<div class="hint">先に生徒を選択してください</div>'}
+    {selection_html}
     {active_table}
     """
 
@@ -190,4 +222,9 @@ def handle_post(fields: dict, conn) -> tuple[str, dict]:
     else:
         raise ValueError(f"不明な action です: {action}")
 
-    return message_html, {"student_id": [student_id]}
+    return message_html, {
+        "student_id": [student_id],
+        "subject_id": [get("subject_id")],
+        "instructor_id": [get("instructor_id")],
+        "effective_start_date": [get("effective_start_date", date.today().isoformat())],
+    }
