@@ -36,6 +36,10 @@ MENU_GROUPS = [
     ("講習会", [
         ("/camps-hub", "講習会"),
     ]),
+    ("集計", [
+        ("/utilization", "稼働率"),
+        ("/instructor-performance", "講師実績確認"),
+    ]),
 ]
 
 # 既存コードとの互換用: グループを平坦化した (path, label) の一覧

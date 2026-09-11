@@ -6,10 +6,10 @@ import page_camps_hub
 
 
 class CampsHubNavigationTest(unittest.TestCase):
-    def test_sidebar_has_expected_four_groups(self):
+    def test_sidebar_has_expected_groups(self):
         self.assertEqual(
             [name for name, _items in layout.MENU_GROUPS],
-            ["基本設定", "生徒情報", "講師情報", "講習会"],
+            ["基本設定", "生徒情報", "講師情報", "講習会", "集計"],
         )
 
     def test_sidebar_only_links_to_camps_hub_for_camp_group(self):
