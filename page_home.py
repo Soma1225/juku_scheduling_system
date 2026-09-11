@@ -12,6 +12,7 @@ page_home.py: ホーム画面(ダッシュボード)
 import datetime
 from db import get_conn, format_grade_label
 from page_instructor_academic_year import get_pending_promotions, get_at_max_unconfirmed
+from page_makeup_sessions import list_unscheduled_makeups
 
 WEEKDAYS_JP = ["月", "火", "水", "木", "金", "土", "日"]
 PERIOD_NUMBERS = [1, 2, 3, 4, 5]
@@ -70,6 +71,7 @@ def get_schedule_for_date(conn, target_date: datetime.date) -> list[dict]:
             "student_id": student_id, "student_name": student_name,
             "base_grade": base_grade, "track": track,
             "subject_id": subject_id, "subject_name": subject_name, "subject_group": subject_group,
+            "is_makeup": False,
         })
 
     # --- 講習会セッション(日付ベース、SESSIONS/ASSIGNMENTSに実際に組まれているもののみ) ---
@@ -94,6 +96,31 @@ def get_schedule_for_date(conn, target_date: datetime.date) -> list[dict]:
             "student_id": student_id, "student_name": student_name,
             "base_grade": base_grade, "track": track,
             "subject_id": subject_id, "subject_name": subject_name, "subject_group": subject_group,
+            "is_makeup": False,
+        })
+
+    # --- 振替授業（元の欠席記録から生徒・科目を辿る） ---
+    makeup_rows = conn.execute(
+        """SELECT m.period_number,m.instructor_id,i.last_name||i.first_name,
+                  a.student_id,s.last_name||s.first_name,s.base_grade,s.track,
+                  sub.subject_id,sub.subject_name,sub.subject_group
+           FROM MAKEUP_SESSIONS m
+           JOIN ATTENDANCE_RECORDS a ON a.attendance_id=m.attendance_id
+           JOIN INSTRUCTORS i ON i.instructor_id=m.instructor_id
+           JOIN STUDENTS s ON s.student_id=a.student_id
+           JOIN SUBJECTS sub ON sub.subject_id=a.subject_id
+           WHERE m.makeup_date=?""",
+        (date_str,),
+    ).fetchall()
+    for row in makeup_rows:
+        (period, instr_id, instr_name, student_id, student_name, base_grade,
+         track, subject_id, subject_name, subject_group) = row
+        records.append({
+            "period": period, "instructor_id": instr_id, "instructor_name": instr_name,
+            "student_id": student_id, "student_name": student_name,
+            "base_grade": base_grade, "track": track,
+            "subject_id": subject_id, "subject_name": subject_name, "subject_group": subject_group,
+            "is_makeup": True,
         })
 
     return records
@@ -268,7 +295,15 @@ def _build_timetable_html(conn, target_date, records: list[dict]) -> str:
                 cells += f'<td rowspan="{rowspan}" class="col-instructor">{instructor_name}</td>'
             cells += f'<td class="col-grade">{format_grade_label(rec["base_grade"])}</td>'
             cells += f'<td class="col-student">{rec["student_name"]}</td>'
-            cells += f'<td class="col-subject">{_subject_badge(rec["subject_group"], rec["subject_name"])}</td>'
+            makeup_badge = (
+                '<span class="makeup-badge" style="display:inline-block;margin-left:3px;padding:1px 4px;'
+                'border-radius:3px;background:#FCE8D5;color:#9A4B12;font-size:9px;">振替</span>'
+                if rec.get("is_makeup") else ""
+            )
+            cells += (
+                f'<td class="col-subject">{_subject_badge(rec["subject_group"], rec["subject_name"])}'
+                f'{makeup_badge}</td>'
+            )
             cells += f'<td class="col-attendance">{_attendance_cell(conn, target_date, rec)}</td>'
         rows_html += f"<tr>{cells}</tr>"
 
@@ -346,6 +381,7 @@ def _build_notice_panel(conn) -> str:
     missing_students = _get_students_missing_regular_enrollment(conn)
     pending_promotions = get_pending_promotions(conn)
     at_max = get_at_max_unconfirmed(conn)
+    pending_makeups = list_unscheduled_makeups(conn)
 
     info_items = ""
     for sid, name, grade in missing_students:
@@ -366,7 +402,17 @@ def _build_notice_panel(conn) -> str:
 
     n_info = len(missing_students) + len(pending_promotions) + len(at_max)
     info_html = f"<ul class='notice-list'>{info_items}</ul>" if info_items else '<div class="hint">お知らせはありません</div>'
-    transfer_html = '<div class="hint">振替の管理機能は今後追加予定です</div>'
+    transfer_items = "".join(
+        f'<li><a href="/makeup-schedule?attendance_id={item["attendance_id"]}">'
+        f'{item["student_name"]}　{item["session_date"]}・{item["period_number"]}限 '
+        f'{item["subject_name"]}（振替先未定）</a></li>'
+        for item in pending_makeups
+    )
+    transfer_html = (
+        f'<ul class="notice-list">{transfer_items}</ul>'
+        f'<p><a href="/makeup-unscheduled">未配置振替一覧を開く（{len(pending_makeups)}件）</a></p>'
+        if pending_makeups else '<div class="hint">振替先未定の欠席はありません</div>'
+    )
     error_html = '<div class="hint">エラー検知機能は今後追加予定です</div>'
 
     return f"""

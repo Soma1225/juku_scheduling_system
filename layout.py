@@ -20,6 +20,7 @@ MENU_GROUPS = [
         ("/student-instructor-preferences", "生徒ごとの推奨・NG講師"),
         ("/regular-enrollments", "通常授業 契約登録"),
         ("/follow-enrollments", "教科フォロー登録"),
+        ("/makeup-unscheduled", "未配置振替一覧"),
         ("/student-availability", "生徒 対応可能時間"),
         ("/schedule-student", "生徒視点の時間割"),
     ]),
@@ -43,6 +44,7 @@ MENU = [("/", "ホーム")] + [item for _, items in MENU_GROUPS for item in item
 ROUTE_TITLES = {path: label for path, label in MENU}
 ROUTE_TITLES["/image-import-review"] = "取込結果確認"
 ROUTE_TITLES["/image-import-corrections"] = "確定済みレビューの訂正"
+ROUTE_TITLES["/makeup-schedule"] = "振替先を決める"
 
 _LAYOUT = """<!DOCTYPE html>
 <html lang="ja">

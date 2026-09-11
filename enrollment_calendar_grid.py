@@ -50,8 +50,9 @@ def evaluate_enrollment_slots(
     student_id: int,
     instructor_id: int,
     effective_start_date: str,
+    makeup_date: str | None = None,
 ) -> tuple[int, str, dict[tuple[str, int], SlotDecision]]:
-    """両契約テーブルと可用性を横断し、各枠が登録可能かを返す。"""
+    """両契約テーブルと、必要なら特定日の振替も横断して判定する。"""
     term_id, term_name = resolve_term_for_date(conn, effective_start_date)
 
     student_occupied: set[tuple[str, int]] = set()
@@ -96,12 +97,38 @@ def evaluate_enrollment_slots(
     ).fetchone()
     instructor_name = instructor[0] if instructor else "選択した講師"
 
+    student_makeup_occupied: set[tuple[str, int]] = set()
+    if makeup_date is not None:
+        try:
+            target = date.fromisoformat(makeup_date)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("振替日は YYYY-MM-DD 形式で入力してください") from exc
+        makeup_day = DAYS[target.weekday()]
+        student_makeup_occupied = {
+            (makeup_day, int(period))
+            for (period,) in conn.execute(
+                """SELECT m.period_number FROM MAKEUP_SESSIONS m
+                   JOIN ATTENDANCE_RECORDS a ON a.attendance_id=m.attendance_id
+                   WHERE a.student_id=? AND m.makeup_date=?""",
+                (student_id, makeup_date),
+            ).fetchall()
+        }
+        for period, count in conn.execute(
+            """SELECT period_number,COUNT(*) FROM MAKEUP_SESSIONS
+               WHERE instructor_id=? AND makeup_date=? GROUP BY period_number""",
+            (instructor_id, makeup_date),
+        ).fetchall():
+            key = (makeup_day, int(period))
+            instructor_counts[key] = instructor_counts.get(key, 0) + int(count)
+
     decisions: dict[tuple[str, int], SlotDecision] = {}
     for day in DAYS:
         for period in PERIOD_NUMBERS:
             key = (day, period)
             if key in student_occupied:
                 decisions[key] = SlotDecision(True, "本人：授業あり")
+            elif key in student_makeup_occupied:
+                decisions[key] = SlotDecision(True, "本人：別の振替あり")
             elif instructor_counts.get(key, 0) >= 2:
                 decisions[key] = SlotDecision(True, f"{instructor_name}先生：1:2の上限")
             elif key in student_unavailable:
@@ -111,6 +138,28 @@ def evaluate_enrollment_slots(
             else:
                 decisions[key] = SlotDecision(False)
     return term_id, term_name, decisions
+
+
+def evaluate_makeup_slots(
+    conn,
+    student_id: int,
+    instructor_id: int,
+    makeup_date: str,
+) -> tuple[int, str, str, dict[tuple[str, int], SlotDecision]]:
+    """振替日の曜日と、その日だけに使う5限分の判定を返す。"""
+    try:
+        target = date.fromisoformat(makeup_date)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("振替日は YYYY-MM-DD 形式で入力してください") from exc
+    day_of_week = DAYS[target.weekday()]
+    term_id, term_name, decisions = evaluate_enrollment_slots(
+        conn,
+        student_id,
+        instructor_id,
+        makeup_date,
+        makeup_date=makeup_date,
+    )
+    return term_id, term_name, day_of_week, decisions
 
 
 def validate_enrollment_slot(
@@ -183,4 +232,40 @@ def build_enrollment_calendar_grid(
       .slot-open {{ font-weight:bold; }}
     </style>
     <table class="enrollment-grid"><tr><th>限＼曜日</th>{headers}</tr>{''.join(rows)}</table>
+    """
+
+
+def build_single_day_period_grid(
+    *,
+    action_path: str,
+    day_of_week: str,
+    decisions: dict[tuple[str, int], SlotDecision],
+    hidden_fields: dict[str, object],
+) -> str:
+    """特定日の5限を、同じdisabled表現で縦に描画する。"""
+    buttons = []
+    for period in PERIOD_NUMBERS:
+        decision = decisions[(day_of_week, period)]
+        hidden = "".join(
+            f'<input type="hidden" name="{html.escape(str(name))}" '
+            f'value="{html.escape(str(value))}">'
+            for name, value in hidden_fields.items()
+        )
+        disabled = " disabled" if decision.disabled else ""
+        label = html.escape(decision.reason) if decision.reason else "この限に振替"
+        buttons.append(
+            f'<form class="slot-form" method="POST" action="{html.escape(action_path)}">'
+            f'{hidden}<input type="hidden" name="period_number" value="{period}">'
+            f'<button class="slot-button makeup-slot-button" type="submit"{disabled}>'
+            f'{period}限<br><span class="slot-reason">{label}</span></button></form>'
+        )
+    return f"""
+    <style>
+      .makeup-period-grid {{ display:grid; grid-template-columns:repeat(5,minmax(110px,1fr)); gap:8px; }}
+      .slot-form {{ margin:0; }}
+      .makeup-slot-button {{ min-height:72px; width:100%; padding:8px 5px; font-size:12px; }}
+      .makeup-slot-button:disabled {{ background:#d7d7d4; color:#666; cursor:not-allowed; opacity:1; }}
+      .slot-reason {{ display:inline-block; margin-top:4px; font-size:10px; line-height:1.25; }}
+    </style>
+    <div class="makeup-period-grid">{''.join(buttons)}</div>
     """
