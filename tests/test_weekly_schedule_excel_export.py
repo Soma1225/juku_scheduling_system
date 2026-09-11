@@ -15,6 +15,8 @@ from weekly_schedule_excel_export import (
 )
 import app
 import layout
+from core_migrations import ensure_core_schema
+from page_closure_dates import add_closure_date, delete_closure_date
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,27 +72,34 @@ class WeeklyScheduleExcelExportTests(unittest.TestCase):
     def tearDown(self):
         self.conn.close()
 
-    def test_student_export_uses_vba_coordinates_and_preserves_template(self):
+    def test_student_export_uses_vba_calendar_coordinates_and_preserves_template(self):
+        self.conn.executemany(
+            "INSERT INTO CLOSURE_DATES(closure_date,closure_name) VALUES(?,?)",
+            [("2026-09-14", "臨時休校"), ("2026-09-20", "秋季休校")],
+        )
         original = openpyxl.load_workbook(TEMPLATE_PATH)
         original_merges = {str(item) for item in original["5コマ"].merged_cells.ranges}
-        body, filename = export_student_weekly_xlsx(self.conn, 1)
+        body, filename = export_student_weekly_xlsx(
+            self.conn, 1, "2026-09-14", "2026-10-05"
+        )
         workbook = openpyxl.load_workbook(io.BytesIO(body))
         sheet = workbook["生徒週間時間割"]
 
-        self.assertEqual(filename, "山田花子_週間時間割.xlsx")
+        self.assertEqual(filename, "山田花子_20260914-20261005_授業時間割.xlsx")
         self.assertEqual(workbook.sheetnames, ["生徒週間時間割"])
         self.assertEqual(sheet["B5"].value, "中2")
         self.assertEqual(sheet["I5"].value, "山田花子")
         self.assertEqual(sheet["S5"].value, "さん")
-        self.assertEqual(sheet["B10"].value, "科目")
-        self.assertEqual(sheet["B18"].value, "講師")
-        self.assertEqual([sheet.cell(12, col).value for col in range(7, 13)], list("月火水木金土"))
-        self.assertEqual([sheet.cell(20, col).value for col in range(7, 13)], list("月火水木金土"))
+        self.assertEqual((sheet["G10"].value, sheet["G11"].value, sheet["G12"].value), (9, 14, "月"))
+        self.assertEqual((sheet["H18"].value, sheet["H19"].value, sheet["H20"].value), (10, 1, "木"))
         self.assertEqual(sheet["G13"].value, "数学")
-        self.assertEqual(sheet["G21"].value, "田中")
-        self.assertEqual(sheet["H14"].value, "教科フォロー(文系)")
-        self.assertEqual(sheet["H22"].value, "田中")
-        self.assertEqual({str(item) for item in sheet.merged_cells.ranges}, original_merges)
+        self.assertNotIn("G13:G17", {str(item) for item in sheet.merged_cells.ranges})
+        self.assertEqual(sheet["M13"].value, "秋季休校")
+        self.assertIn("M13:M17", {str(item) for item in sheet.merged_cells.ranges})
+        self.assertEqual(sheet["M13"].alignment.textRotation, 255)
+        self.assertEqual(sheet["L21"].value, "数学")
+        self.assertEqual(sheet.print_area, "'生徒週間時間割'!$A$1:$V$37")
+        self.assertTrue(original_merges.issubset({str(item) for item in sheet.merged_cells.ranges}))
 
     def test_instructor_export_groups_two_students_in_one_slot(self):
         body, filename = export_instructor_weekly_xlsx(self.conn, 1)
@@ -150,12 +159,46 @@ class WeeklyScheduleExcelExportTests(unittest.TestCase):
                VALUES(1,2,1,'月',1,'2026-04-01')"""
         )
         with self.assertRaises(WeeklyScheduleCapacityError):
-            export_student_weekly_xlsx(self.conn, 1)
+            export_student_weekly_xlsx(self.conn, 1, "2026-09-14", "2026-09-20")
+
+    def test_student_export_rejects_more_than_thirty_two_days(self):
+        with self.assertRaisesRegex(ValueError, "32日間以内"):
+            export_student_weekly_xlsx(self.conn, 1, "2026-09-01", "2026-10-03")
+
+    def test_closure_dates_can_be_added_and_deleted_but_not_duplicated(self):
+        add_closure_date(self.conn, "2025-01-01", "年始休校")
+        self.assertEqual(
+            self.conn.execute("SELECT closure_name FROM CLOSURE_DATES WHERE closure_date='2025-01-01'").fetchone()[0],
+            "年始休校",
+        )
+        with self.assertRaisesRegex(ValueError, "既に休校日"):
+            add_closure_date(self.conn, "2025-01-01", "重複")
+        delete_closure_date(self.conn, "2025-01-01")
+        self.assertIsNone(
+            self.conn.execute("SELECT 1 FROM CLOSURE_DATES WHERE closure_date='2025-01-01'").fetchone()
+        )
+
+    def test_existing_database_receives_closure_dates_migration_once(self):
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """CREATE TABLE APP_SCHEMA_MIGRATIONS(
+                   migration_id TEXT PRIMARY KEY, applied_at TEXT NOT NULL
+               );
+               INSERT INTO APP_SCHEMA_MIGRATIONS VALUES('003_instructor_snapshot_import','2026-01-01');"""
+        )
+        self.assertTrue(ensure_core_schema(conn))
+        self.assertIsNotNone(
+            conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='CLOSURE_DATES'").fetchone()
+        )
+        self.assertFalse(ensure_core_schema(conn))
+        conn.close()
 
     def test_export_page_is_routed_and_visible_in_sidebar(self):
         self.assertIn("/weekly-schedule-export", app.ROUTES)
+        self.assertIn("/closure-dates", app.ROUTES)
         basic_menu = dict(next(items for name, items in layout.MENU_GROUPS if name == "基本設定"))
         self.assertEqual(basic_menu["/weekly-schedule-export"], "通常授業 週間Excel出力")
+        self.assertEqual(basic_menu["/closure-dates"], "休校日設定")
 
 
 if __name__ == "__main__":

@@ -55,6 +55,7 @@ import page_image_import_corrections
 import page_student_instructor_preferences
 import page_instructor_detail
 import page_weekly_schedule_export
+import page_closure_dates
 from image_import_service import DEFAULT_STORAGE_ROOT
 from camp_schedule_excel_export import (
     CampScheduleCapacityError,
@@ -106,6 +107,7 @@ ROUTES = {
     ),
     "/instructor-detail": (page_instructor_detail.render, None),
     "/weekly-schedule-export": (page_weekly_schedule_export.render, None),
+    "/closure-dates": (page_closure_dates.render, page_closure_dates.handle_post),
 }
 
 
@@ -276,7 +278,12 @@ class PortalHandler(BaseHTTPRequestHandler):
         conn = get_conn()
         try:
             if kind == "student":
-                body, filename = export_student_weekly_xlsx(conn, int(qs.get("student_id", [""])[0]))
+                body, filename = export_student_weekly_xlsx(
+                    conn,
+                    int(qs.get("student_id", [""])[0]),
+                    qs.get("start_date", [""])[0],
+                    qs.get("end_date", [""])[0],
+                )
             elif kind == "instructor":
                 body, filename = export_instructor_weekly_xlsx(
                     conn, int(qs.get("instructor_id", [""])[0])

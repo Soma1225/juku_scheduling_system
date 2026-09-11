@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import datetime
 from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass
@@ -17,8 +18,10 @@ from db import format_grade_label, get_current_grade
 
 TEMPLATE_PATH = Path(__file__).with_name("assets") / "printout_student_teacher_weekly_template.xlsx"
 WEEKDAYS = ("月", "火", "水", "木", "金", "土")
+CALENDAR_WEEKDAYS = ("月", "火", "水", "木", "金", "土", "日")
 PERIOD_COUNT = 5
 CLASSROOM_ROWS_PER_PERIOD = 15
+MAX_STUDENT_CALENDAR_DAYS = 32
 
 
 class WeeklyScheduleExportError(ValueError):
@@ -43,6 +46,8 @@ class WeeklyLesson:
     day_of_week: str
     period_number: int
     course_type: str
+    effective_start_date: str
+    effective_end_date: str | None
 
     @property
     def current_grade(self) -> int:
@@ -65,7 +70,8 @@ def _load_lessons(conn, *, student_id: int | None = None, instructor_id: int | N
     sql = f"""
         SELECT e.student_id,st.last_name||st.first_name,st.enrollment_year,st.base_grade,
                e.instructor_id,COALESCE(NULLIF(i.short_name,''),i.last_name),
-               sub.subject_name,e.day_of_week,e.period_number,?
+               sub.subject_name,e.day_of_week,e.period_number,?,
+               e.effective_start_date,e.effective_end_date
         FROM {{table}} e
         JOIN STUDENTS st ON st.student_id=e.student_id
         JOIN INSTRUCTORS i ON i.instructor_id=e.instructor_id
@@ -80,6 +86,50 @@ def _load_lessons(conn, *, student_id: int | None = None, instructor_id: int | N
         rows.extend(conn.execute(sql.format(table=table), [course_type, *params]).fetchall())
     day_order = {day: index for index, day in enumerate(WEEKDAYS)}
     rows.sort(key=lambda row: (day_order[row[7]], row[8], row[5], row[1], row[9]))
+    return [WeeklyLesson(*row) for row in rows]
+
+
+def _student_calendar_range(start_date: str, end_date: str) -> tuple[datetime.date, datetime.date]:
+    try:
+        start = datetime.date.fromisoformat(start_date)
+        end = datetime.date.fromisoformat(end_date)
+    except (TypeError, ValueError) as exc:
+        raise WeeklyScheduleExportError("開始日・終了日は YYYY-MM-DD 形式で指定してください") from exc
+    if start > end:
+        raise WeeklyScheduleExportError("開始日は終了日以前の日付にしてください")
+    days = (end - start).days + 1
+    if days > MAX_STUDENT_CALENDAR_DAYS:
+        raise WeeklyScheduleExportError("期間は32日間以内に設定してください")
+    return start, end
+
+
+def _load_student_calendar_lessons(
+    conn, student_id: int, start: datetime.date, end: datetime.date
+) -> list[WeeklyLesson]:
+    sql = """
+        SELECT e.student_id,st.last_name||st.first_name,st.enrollment_year,st.base_grade,
+               e.instructor_id,COALESCE(NULLIF(i.short_name,''),i.last_name),
+               sub.subject_name,e.day_of_week,e.period_number,?,
+               e.effective_start_date,e.effective_end_date
+        FROM {table} e
+        JOIN STUDENTS st ON st.student_id=e.student_id
+        JOIN INSTRUCTORS i ON i.instructor_id=e.instructor_id
+        JOIN SUBJECTS sub ON sub.subject_id=e.subject_id
+        WHERE e.student_id=?
+          AND e.effective_start_date<=?
+          AND (e.effective_end_date IS NULL OR e.effective_end_date>?)
+    """
+    rows = []
+    for table, course_type in (
+        ("REGULAR_COURSE_ENROLLMENTS", "通常授業"),
+        ("FOLLOW_COURSE_ENROLLMENTS", "教科フォロー"),
+    ):
+        rows.extend(
+            conn.execute(
+                sql.format(table=table),
+                (course_type, student_id, end.isoformat(), start.isoformat()),
+            ).fetchall()
+        )
     return [WeeklyLesson(*row) for row in rows]
 
 
@@ -127,7 +177,8 @@ def _validate_slot_capacity(lessons: list[WeeklyLesson], *, limit: int, label: s
         raise WeeklyScheduleCapacityError(errors)
 
 
-def build_student_weekly_workbook(conn, student_id: int):
+def build_student_weekly_workbook(conn, student_id: int, start_date: str, end_date: str):
+    start, end = _student_calendar_range(start_date, end_date)
     student = conn.execute(
         """SELECT last_name,first_name,enrollment_year,base_grade,gender
            FROM STUDENTS WHERE student_id=?""",
@@ -135,8 +186,7 @@ def build_student_weekly_workbook(conn, student_id: int):
     ).fetchone()
     if student is None:
         raise WeeklyScheduleExportError("対象の生徒が見つかりません")
-    lessons = _load_lessons(conn, student_id=student_id)
-    _validate_slot_capacity(lessons, limit=1, label="生徒用時間割")
+    lessons = _load_student_calendar_lessons(conn, student_id, start, end)
 
     workbook = _load_template()
     sheet = workbook["5コマ"]
@@ -147,33 +197,72 @@ def build_student_weekly_workbook(conn, student_id: int):
     sheet["S5"] = "くん" if student[4] == "男" else "さん"
 
     period_labels = _period_labels(conn)
-    sheet["B10"] = "科目"
-    sheet["B18"] = "講師"
-    sheet["B11"] = "曜日・時間帯"
-    sheet["B19"] = "曜日・時間帯"
     for period in range(1, PERIOD_COUNT + 1):
         sheet.cell(12 + period, 2, period_labels.get(period, ""))
         sheet.cell(20 + period, 2, period_labels.get(period, ""))
-    for day_index, day in enumerate(WEEKDAYS):
-        column = 7 + day_index  # VBAの先頭日付列 G から月～土を配置
-        sheet.cell(12, column, day)
-        sheet.cell(20, column, day)
+    closures = dict(
+        conn.execute(
+            "SELECT closure_date,closure_name FROM CLOSURE_DATES WHERE closure_date BETWEEN ? AND ?",
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+    )
+    by_weekday: dict[str, list[WeeklyLesson]] = defaultdict(list)
     for lesson in lessons:
-        column = 7 + WEEKDAYS.index(lesson.day_of_week)
-        for row, value in (
-            (12 + lesson.period_number, lesson.subject_name),
-            (20 + lesson.period_number, lesson.instructor_name),
-        ):
-            cell = sheet.cell(row, column)
-            cell.value = value
+        by_weekday[lesson.day_of_week].append(lesson)
+
+    current = start
+    day_index = 0
+    while current <= end:
+        block_offset = 0 if day_index < 16 else 8
+        column = 7 + (day_index % 16)
+        if day_index == 0 or current.day == 1:
+            sheet.cell(10 + block_offset, column, current.month)
+        sheet.cell(11 + block_offset, column, current.day)
+        weekday = CALENDAR_WEEKDAYS[current.weekday()]
+        sheet.cell(12 + block_offset, column, weekday)
+
+        written_periods: set[int] = set()
+        for lesson in by_weekday.get(weekday, []):
+            current_text = current.isoformat()
+            if current_text < lesson.effective_start_date:
+                continue
+            if lesson.effective_end_date is not None and current_text >= lesson.effective_end_date:
+                continue
+            if not 1 <= lesson.period_number <= PERIOD_COUNT:
+                raise WeeklyScheduleCapacityError(
+                    [f"{current.isoformat()}の{lesson.period_number}限はテンプレートの1～5限に収まりません"]
+                )
+            if lesson.period_number in written_periods:
+                raise WeeklyScheduleCapacityError(
+                    [f"{current.isoformat()} {lesson.period_number}限に複数の授業があり、1セルに収まりません"]
+                )
+            cell = sheet.cell(12 + block_offset + lesson.period_number, column)
+            cell.value = lesson.subject_name
             alignment = copy(cell.alignment)
             alignment.shrink_to_fit = True
             alignment.wrap_text = False
             alignment.horizontal = "center"
             alignment.vertical = "center"
             cell.alignment = alignment
+            written_periods.add(lesson.period_number)
+
+        closure_name = closures.get(current.isoformat())
+        if closure_name and not written_periods:
+            first_row = 13 + block_offset
+            last_row = 17 + block_offset
+            sheet.merge_cells(start_row=first_row, start_column=column, end_row=last_row, end_column=column)
+            cell = sheet.cell(first_row, column, closure_name)
+            cell.alignment = Alignment(horizontal="center", vertical="center", text_rotation=255)
+        current += datetime.timedelta(days=1)
+        day_index += 1
+
+    used_columns = min(16, max(day_index, day_index - 16))
+    last_used_column = 6 + used_columns
+    # 宛名欄がU列まであるため、短い期間でも宛名を切らない。
+    last_print_column = max(21, last_used_column)
+    sheet.print_area = f"A1:{openpyxl.utils.get_column_letter(last_print_column)}37"
     sheet.title = "生徒週間時間割"
-    return workbook, name
+    return workbook, name, start, end
 
 
 def build_instructor_weekly_workbook(conn, instructor_id: int):
@@ -300,9 +389,16 @@ def _save(workbook, filename: str) -> tuple[bytes, str]:
     return output.getvalue(), filename
 
 
-def export_student_weekly_xlsx(conn, student_id: int) -> tuple[bytes, str]:
-    workbook, name = build_student_weekly_workbook(conn, student_id)
-    return _save(workbook, f"{name}_週間時間割.xlsx")
+def export_student_weekly_xlsx(
+    conn, student_id: int, start_date: str, end_date: str
+) -> tuple[bytes, str]:
+    workbook, name, start, end = build_student_weekly_workbook(
+        conn, student_id, start_date, end_date
+    )
+    return _save(
+        workbook,
+        f"{name}_{start.strftime('%Y%m%d')}-{end.strftime('%Y%m%d')}_授業時間割.xlsx",
+    )
 
 
 def export_instructor_weekly_xlsx(conn, instructor_id: int) -> tuple[bytes, str]:

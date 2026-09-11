@@ -1,6 +1,7 @@
 """通常授業の週間時間割Excelを、生徒用・講師用・教室全体用に出力する入口。"""
 
 import html
+import datetime
 
 from db import get_conn
 
@@ -8,6 +9,11 @@ from db import get_conn
 def render(qs: dict, message_html: str = "") -> str:
     selected_student = qs.get("student_id", [""])[0]
     selected_instructor = qs.get("instructor_id", [""])[0]
+    default_start = datetime.date.today()
+    start_date = html.escape(qs.get("start_date", [default_start.isoformat()])[0])
+    end_date = html.escape(
+        qs.get("end_date", [(default_start + datetime.timedelta(days=6)).isoformat()])[0]
+    )
     conn = get_conn()
     students = conn.execute(
         """SELECT student_id,last_name||' '||first_name FROM STUDENTS
@@ -29,14 +35,18 @@ def render(qs: dict, message_html: str = "") -> str:
     )
     return f"""
     <h1>通常授業 週間Excel出力</h1>
-    <div class="hint">現在有効な通常授業と教科フォローを、配布・掲示用の週間時間割として出力します。</div>
+    <div class="hint">通常授業と教科フォローを出力します。生徒用は指定期間の暦日、講師用・教室全体用は曜日別です。</div>
     {message_html}
     <div class="hub-grid">
       <section class="hub-card">
-        <h2>生徒用</h2>
+        <h2>生徒用（日付カレンダー）</h2>
         <label>生徒</label>
         <select id="weekly-student"><option value="">選択してください</option>{student_options}</select>
-        <button type="button" onclick="downloadWeekly('student','weekly-student')">生徒用Excelをダウンロード</button>
+        <label>開始日</label>
+        <input id="student-calendar-start" type="date" value="{start_date}" required>
+        <label>終了日（開始日を含め最大32日）</label>
+        <input id="student-calendar-end" type="date" value="{end_date}" required>
+        <button type="button" onclick="downloadStudentCalendar()">生徒用Excelをダウンロード</button>
       </section>
       <section class="hub-card">
         <h2>講師用</h2>
@@ -56,6 +66,16 @@ def render(qs: dict, message_html: str = "") -> str:
       if (!value) {{ alert('対象者を選択してください'); return; }}
       const key = kind === 'student' ? 'student_id' : 'instructor_id';
       location.href = '/weekly-schedule-export-download?kind=' + kind + '&' + key + '=' + encodeURIComponent(value);
+    }}
+    function downloadStudentCalendar() {{
+      const studentId = document.getElementById('weekly-student').value;
+      const startDate = document.getElementById('student-calendar-start').value;
+      const endDate = document.getElementById('student-calendar-end').value;
+      if (!studentId) {{ alert('生徒を選択してください'); return; }}
+      if (!startDate || !endDate) {{ alert('開始日と終了日を指定してください'); return; }}
+      location.href = '/weekly-schedule-export-download?kind=student&student_id=' +
+        encodeURIComponent(studentId) + '&start_date=' + encodeURIComponent(startDate) +
+        '&end_date=' + encodeURIComponent(endDate);
     }}
     </script>
     """
