@@ -56,6 +56,7 @@ import page_student_instructor_preferences
 import page_instructor_detail
 import page_weekly_schedule_export
 import page_closure_dates
+import page_makeup_sessions
 from image_import_service import DEFAULT_STORAGE_ROOT
 from camp_schedule_excel_export import (
     CampScheduleCapacityError,
@@ -108,6 +109,8 @@ ROUTES = {
     "/instructor-detail": (page_instructor_detail.render, None),
     "/weekly-schedule-export": (page_weekly_schedule_export.render, None),
     "/closure-dates": (page_closure_dates.render, page_closure_dates.handle_post),
+    "/makeup-unscheduled": (page_makeup_sessions.render_unscheduled, None),
+    "/makeup-schedule": (page_makeup_sessions.render_schedule, page_makeup_sessions.handle_schedule_post),
 }
 
 

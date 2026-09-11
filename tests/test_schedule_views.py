@@ -37,6 +37,14 @@ CREATE TABLE FOLLOW_COURSE_ENROLLMENTS(
     instructor_id INTEGER,day_of_week TEXT,period_number INTEGER,
     effective_start_date TEXT,effective_end_date TEXT
 );
+CREATE TABLE ATTENDANCE_RECORDS(
+    attendance_id INTEGER PRIMARY KEY,session_date TEXT,student_id INTEGER,subject_id INTEGER,
+    instructor_id INTEGER,period_number INTEGER,status TEXT
+);
+CREATE TABLE MAKEUP_SESSIONS(
+    makeup_id INTEGER PRIMARY KEY,attendance_id INTEGER UNIQUE,makeup_date TEXT,
+    period_number INTEGER,instructor_id INTEGER,reason_category TEXT,reason_detail TEXT
+);
 """
 
 

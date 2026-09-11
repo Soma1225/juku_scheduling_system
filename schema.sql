@@ -302,6 +302,18 @@ CREATE TABLE ATTENDANCE_RECORDS (
     UNIQUE (session_date, student_id, subject_id, instructor_id, period_number)
 );
 
+-- 欠席した授業の振替先。生徒・科目は元の出欠記録を通じて参照する。
+CREATE TABLE MAKEUP_SESSIONS (
+    makeup_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    attendance_id    INTEGER NOT NULL UNIQUE REFERENCES ATTENDANCE_RECORDS(attendance_id),
+    makeup_date      TEXT NOT NULL,
+    period_number    INTEGER NOT NULL,
+    instructor_id    INTEGER NOT NULL REFERENCES INSTRUCTORS(instructor_id),
+    reason_category  TEXT NOT NULL CHECK (reason_category IN ('講師都合','生徒都合','冠婚葬祭')),
+    reason_detail    TEXT,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
 -- ---------------------------------------------------------
 -- インデックス（スケジューリング時によく使う検索軸）
 -- ---------------------------------------------------------
@@ -314,3 +326,4 @@ CREATE INDEX idx_reg_enroll_instructor_active ON REGULAR_COURSE_ENROLLMENTS(inst
 CREATE INDEX idx_regular_course_requests_term_status ON REGULAR_COURSE_REQUESTS(term_id, status);
 CREATE INDEX idx_regular_course_requests_student ON REGULAR_COURSE_REQUESTS(student_id, term_id);
 CREATE INDEX idx_attendance_date ON ATTENDANCE_RECORDS(session_date);
+CREATE INDEX idx_makeup_sessions_date ON MAKEUP_SESSIONS(makeup_date, period_number, instructor_id);
