@@ -185,6 +185,7 @@ SUBJECT_BADGE_COLORS = {
     "理科": "#EAF6E8;color:#3D7A2E", "社会": "#F3EAF6;color:#7A3D9B",
     "戦略指導": "#FBE5EC;color:#B0356B", "教科フォロー": "#FDF3D8;color:#9B7D1E",
 }
+TIMETABLE_ROWS_PER_PERIOD = 15
 
 
 def _subject_badge(subject_group: str, subject_name: str) -> str:
@@ -231,10 +232,6 @@ def _build_timetable_html(conn, target_date, records: list[dict]) -> str:
     for p in PERIOD_NUMBERS:
         period_blocks[p].sort(key=lambda t: t[1])
 
-    max_blocks = max((len(v) for v in period_blocks.values()), default=0)
-    if max_blocks == 0:
-        return '<div class="hint">この日の予定はありません</div>'
-
     # ヘッダー
     period_times = {1: "14:20〜15:40", 2: "15:50〜17:10", 3: "17:20〜18:40", 4: "19:00〜20:20", 5: "20:30〜21:50"}
     period_marks = {1: "①", 2: "②", 3: "③", 4: "④", 5: "⑤"}
@@ -252,7 +249,12 @@ def _build_timetable_html(conn, target_date, records: list[dict]) -> str:
             for i, rec in enumerate(recs):
                 period_lines[p].append((instructor_name if i == 0 else None, rec, len(recs) if i == 0 else 0))
 
-    max_lines = max((len(v) for v in period_lines.values()), default=0)
+    # Excelの「時間割一覧」と同じく各限を最低15行表示する。
+    # 15件を超える実データは切り捨てず、その件数まで行を増やす。
+    max_lines = max(
+        TIMETABLE_ROWS_PER_PERIOD,
+        max((len(v) for v in period_lines.values()), default=0),
+    )
     rows_html = ""
     for line_idx in range(max_lines):
         cells = ""
