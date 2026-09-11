@@ -15,6 +15,7 @@ import threading
 import time
 from db import get_conn
 from page_camps import list_camps
+from camp_schedule_excel_export import CampScheduleExportError, validate_camp_schedule_export
 
 # 講習会ごとの実行状況を、メモリ上で保持する。
 # {camp_id: {"status": "idle"|"running"|"done"|"error", "started_at": ..., "result": {...}, "error": "..."}}
@@ -128,6 +129,8 @@ def render(qs: dict, message_html: str = "") -> str:
     conn = get_conn()
     camps = list_camps(conn)
     students = []
+    export_rows = []
+    export_errors = []
     if camp_id:
         students = conn.execute(
             """SELECT DISTINCT st.student_id, st.last_name || ' ' || st.first_name
@@ -137,6 +140,10 @@ def render(qs: dict, message_html: str = "") -> str:
                ORDER BY st.last_name_kana, st.first_name_kana""",
             (int(camp_id),),
         ).fetchall()
+        try:
+            _, export_rows, export_errors = validate_camp_schedule_export(conn, int(camp_id))
+        except CampScheduleExportError as exc:
+            export_errors = [str(exc)]
     conn.close()
 
     def options(rows, selected=""):
@@ -145,7 +152,31 @@ def render(qs: dict, message_html: str = "") -> str:
         )
 
     body_html = ""
+    export_html = ""
     if camp_id:
+        if export_errors and export_rows:
+            rows = "".join(f"<li>{html.escape(error)}</li>" for error in export_errors)
+            export_html = f"""
+            <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;">
+              <h2 style="font-size:16px;margin-top:0;">現行フォーマット Excel出力</h2>
+              <div class="msg error">テンプレートに収まらないため出力できません。<ul>{rows}</ul></div>
+            </section>
+            """
+        elif export_errors:
+            export_html = f"""
+            <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;">
+              <h2 style="font-size:16px;margin-top:0;">現行フォーマット Excel出力</h2>
+              <div class="hint">{html.escape(export_errors[0])}</div>
+            </section>
+            """
+        else:
+            export_html = f"""
+            <section style="margin-top:20px;padding:16px;border:1px solid #ddd;border-radius:8px;">
+              <h2 style="font-size:16px;margin-top:0;">現行フォーマット Excel出力</h2>
+              <div class="hint">確定済みの割当を、25人×5コマ・1シート7日形式で出力します。</div>
+              <button type="button" onclick="location.href='/camp-schedule-export?camp_id={camp_id}'">Excelをダウンロードする</button>
+            </section>
+            """
         job = _get_job_status(int(camp_id))
         status = job.get("status", "idle")
 
@@ -239,6 +270,7 @@ def render(qs: dict, message_html: str = "") -> str:
       <option value="">選択してください</option>{options(camps, camp_id)}
     </select>
     {body_html if camp_id else '<div class="hint">先に講習会を選択してください</div>'}
+    {export_html}
     """
 
 

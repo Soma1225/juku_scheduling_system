@@ -23,8 +23,9 @@ page_*.py の各モジュールに分かれている。
 import threading
 import webbrowser
 import re
+import html as html_module
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 from pathlib import Path
 
 from db import ensure_db_exists, get_conn
@@ -54,6 +55,11 @@ import page_image_import_corrections
 import page_student_instructor_preferences
 import page_instructor_detail
 from image_import_service import DEFAULT_STORAGE_ROOT
+from camp_schedule_excel_export import (
+    CampScheduleCapacityError,
+    CampScheduleExportError,
+    export_camp_schedule_xlsx,
+)
 
 PORT = 8000
 
@@ -154,6 +160,9 @@ class PortalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if path == "/camp-schedule-export":
+            self._serve_camp_schedule_export(parse_qs(parsed.query))
+            return
         if path == "/image-import-preview":
             self._serve_image_import_preview(parse_qs(parsed.query))
             return
@@ -210,6 +219,42 @@ class PortalHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_camp_schedule_export(self, qs: dict):
+        """検証済みの講習会時間割を、現行形式のExcelとして直接ダウンロードさせる。"""
+        try:
+            camp_id = int(qs.get("camp_id", [""])[0])
+        except (TypeError, ValueError):
+            self.send_error(400, "invalid camp_id")
+            return
+        conn = get_conn()
+        try:
+            body, filename = export_camp_schedule_xlsx(conn, camp_id)
+        except (CampScheduleCapacityError, CampScheduleExportError) as exc:
+            issues = getattr(exc, "errors", [str(exc)])
+            issue_html = "".join(f"<li>{html_module.escape(issue)}</li>" for issue in issues)
+            content = render_page(
+                "/run-scheduler",
+                '<h1>講習会時間割 Excel出力</h1>'
+                f'<div class="msg error">Excelを出力できません。<ul>{issue_html}</ul></div>'
+                f'<a href="/run-scheduler?camp_id={camp_id}">スケジューリング画面へ戻る</a>',
+            )
+            self.send_response(422)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(content)
+            return
+        finally:
+            conn.close()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
